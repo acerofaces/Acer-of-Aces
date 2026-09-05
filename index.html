@@ -82,7 +82,7 @@
         setOpponents(1);
       };
 
-      // V12 HEURISTIC: River Flush Protocol & Texture Danger Downgrades
+      // V13 HEURISTIC: Sequential Cascade & 4-Flush Demotion
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -115,7 +115,6 @@
         const isOverpair = isPair && (v1 < highestBoardVal);
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
 
-        // Advanced Texture Diagnostics
         const bSuits = boardCards.map(c => c.slice(-1));
         const suitCounts = bSuits.reduce((acc, s) => { acc[s] = (acc[s] || 0) + 1; return acc; }, {});
         const isMonotone = Math.max(...Object.values(suitCounts)) >= 3;
@@ -173,21 +172,20 @@
           const dangerBoard = (is4Flush || isBoardPaired) && boardCards.length === 5;
           
           if (dangerBoard) {
-              // V12 FIX: Ruthlessly demote straights and overpairs on paired/4-flush rivers
               if (isSet) tier = 1; 
-              else if (isSuited && isMonotone && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
-              else if (isMadeStraight) tier = 2;
-              else if (isOverpair) tier = 2;
+              // V13 FIX: Prevent 4-flush suit trap. Only promote suited hands on 3-flush monotone boards.
+              else if (isSuited && isMonotone && !is4Flush && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
+              else if (isMadeStraight && !is4Flush) tier = 2;
+              else if (isOverpair && !is4Flush) tier = 2;
           } else {
               if (isMadeStraight) tier = 1;
               else if (isSet || isTwoPair || isOverpair) tier = 1;
               else if (isTopPair && (v1 <= 2 || v2 <= 2)) tier = 2; 
               else if (isStraightDraw) tier = 2;
               else if (isSuited) {
-                // V12 FIX: Removed street length limit for made flushes
                 if (isMonotone) {
                     if (boardCards.length === 5) {
-                        if (v1 <= 2) tier = 1; // Elite flushes promoted to Tier 1 on river
+                        if (v1 <= 2) tier = 1; 
                         else if (v1 <= 4 && v2 <= 4) tier = 2;
                     } else {
                         if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 2; 
@@ -210,7 +208,9 @@
           else if (isStraightDraw) tier = 3;
           else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
           else if (isSuited) {
-            if (isMonotone) {
+            if (is4Flush) {
+                // V13 FIX: Actively ignore suited broadways if there's a 4-flush on board to prevent phantom equity
+            } else if (isMonotone) {
                 if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 3;
             } else if (boardCards.length < 5 && touchesBoard) {
                 tier = 3;
@@ -218,8 +218,9 @@
           }
         }
 
-        if (opponents >= 3 && tier === 3) tier = 4;
+        // V13 FIX: Sequential Cascade correctly flips the order to prevent hands sticking in Tier 3
         if (opponents >= 5 && tier === 2) tier = 3;
+        if (opponents >= 3 && tier === 3) tier = 4;
 
         return tier;
       }, [boardCards, flopAction, turnAction, riverAction, opponents]);
