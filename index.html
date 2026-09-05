@@ -31,8 +31,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
-    import { CardGroup, OddsCalculator } from '@agonyz/poker-odds-calculator';
-    const { useState, useEffect, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
     const SUITS = [
@@ -43,19 +42,24 @@
     ];
 
     function App() {
-      const [hero, setHero] = useState(['Ad', 'Kc']);
-      const [flop, setFlop] = useState(['Ah', 'Qd', 'Th']);
+      const [hero, setHero] = useState([null, null]);
+      const [flop, setFlop] = useState([null, null, null]);
       const [turn, setTurn] = useState(null);
       const [river, setRiver] = useState(null);
       const [opponents, setOpponents] = useState(1);
 
+      // Multi-Street Action Toggles
       const [preflopAction, setPreflopAction] = useState('call');
       const [flopAction, setFlopAction] = useState('check_call');
+      const [turnAction, setTurnAction] = useState('check_call');
+      const [riverAction, setRiverAction] = useState('check_call');
 
       const [pickingSlot, setPickingSlot] = useState(null);
       const [selectedRank, setSelectedRank] = useState('A');
       const [equity, setEquity] = useState({ win: 0, tie: 0, lose: 0, combos: 0 });
       const [isCalculating, setIsCalculating] = useState(false);
+      
+      const workerRef = useRef(null);
 
       const boardCards = useMemo(() => {
         const b = [...flop];
@@ -72,9 +76,13 @@
         setTurn(null);
         setRiver(null);
         setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+        setPreflopAction('call');
+        setFlopAction('check_call');
+        setTurnAction('check_call');
+        setRiverAction('check_call');
       };
 
-      // V2 HEURISTIC: GTO Preflop Gating + Strict Postflop
+      // V3 HEURISTIC: Multi-Street Threat Escalation 
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -82,19 +90,18 @@
         const isPair = r1 === r2;
         const isSuited = hand.includes('s');
 
-        // 1. STRICT PREFLOP GATEKEEPER (Purges ~70% of trash hands immediately)
+        // STRICT PREFLOP GATEKEEPER
         let isPlayablePreflop = false;
-        if (isPair) isPlayablePreflop = true; // All pairs
-        else if (isSuited && v1 <= 4) isPlayablePreflop = true; // Axs, Kxs, Qxs, Jxs, Txs
-        else if (isSuited && Math.abs(v1 - v2) <= 3) isPlayablePreflop = true; // Suited connectors/gappers
-        else if (!isSuited && v1 <= 2 && v2 <= 3) isPlayablePreflop = true; // Premium offsuit (AQo, AJo, KQo)
-        else if (!isSuited && Math.abs(v1 - v2) === 1 && v1 <= 4) isPlayablePreflop = true; // High offsuit connectors (JTo)
+        if (isPair) isPlayablePreflop = true; 
+        else if (isSuited && v1 <= 4) isPlayablePreflop = true; 
+        else if (isSuited && Math.abs(v1 - v2) <= 3) isPlayablePreflop = true; 
+        else if (!isSuited && v1 <= 2 && v2 <= 3) isPlayablePreflop = true; 
+        else if (!isSuited && Math.abs(v1 - v2) === 1 && v1 <= 4) isPlayablePreflop = true; 
         
-        if (!isPlayablePreflop) return 4; // Kill A2o, K4o, etc. instantly.
-        
-        if (boardCards.length < 3) return 3; // If only preflop, surviving hands are Tier 3.
+        if (!isPlayablePreflop) return 4; 
+        if (boardCards.length < 3) return 3; 
 
-        // 2. POSTFLOP LOGIC (Only applies to mathematically sound starting hands)
+        // MULTI-STREET ESCALATION LOGIC
         const bRanks = boardCards.map(c => c[0]);
         const bVals = bRanks.map(r => RANKS.indexOf(r));
         const hit1 = bRanks.includes(r1);
@@ -103,122 +110,125 @@
         const isSet = isPair && hit1;
         const isTwoPair = hit1 && hit2 && !isPair;
         const isTopPair = r1 === bRanks[0] || r2 === bRanks[0];
-        
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
 
-        if (flopAction === 'raise') {
+        // Calculate the maximum aggression across dealt streets
+        let isRaised = false;
+        if (boardCards.length >= 3 && flopAction === 'raise') isRaised = true;
+        if (boardCards.length >= 4 && turnAction === 'raise') isRaised = true;
+        if (boardCards.length === 5 && riverAction === 'raise') isRaised = true;
+
+        if (isRaised) {
+          // If villain raises on ANY active street, enforce strict tiering
           if (isSet || isTwoPair) return 1;
           if (isTopPair && touchesBoard) return 2;
-          if (isSuited && v1 <= 4 && touchesBoard) return 2;
+          if (isSuited && v1 <= 4 && touchesBoard && boardCards.length < 5) return 2; // Draws die on the river
           return 4; 
         } else {
-          // Check/Call
+          // Check/Call Funnel
           if (isSet || isTwoPair) return 1;
           if (isTopPair) return 2;
-          
           if (hit1 || hit2) {
              if (v1 <= bVals[1] || v2 <= bVals[1]) return 3; 
-             return 4; // Purge weak bottom pairs
+             return 4; 
           }
           if (isPair) {
              if (v1 < Math.max(...bVals)) return 3; 
-             return 4; // Purge dead underpairs 
+             return 4; 
           }
-          if (v1 <= 4 && v2 <= 5 && touchesBoard) return 3; 
-          if (isSuited && touchesBoard) return 3; 
+          if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) return 3; 
+          if (isSuited && touchesBoard && boardCards.length < 5) return 3; 
           
-          return 4; // Purge missed air
+          return 4; 
         }
-      }, [boardCards, flopAction]);
+      }, [boardCards, flopAction, turnAction, riverAction]);
 
-      const expandHand = (handStr, usedCards) => {
-        const suits = ['h', 's', 'c', 'd'];
-        const combos = [];
-        const [r1, r2] = handStr;
-        if (handStr.length === 2) {
-          for (let i = 0; i < 4; i++) {
-            for (let j = i + 1; j < 4; j++) {
-              const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
-              if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-            }
-          }
-        } else if (handStr.includes('s')) {
-          for (let i = 0; i < 4; i++) {
-            const c1 = r1 + suits[i]; const c2 = r2 + suits[i];
-            if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-          }
-        } else {
-          for (let i = 0; i < 4; i++) {
-            for (let j = 0; j < 4; j++) {
-              if (i !== j) {
-                const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
-                if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-              }
-            }
-          }
-        }
-        return combos;
-      };
-
-      // ASYNC CHUNKING: Prevents UI freezes and allows instant button taps
+      // INLINE MODULE WEB WORKER SETUP (Runs exactly once on mount)
       useEffect(() => {
-        if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
-        
-        setIsCalculating(true);
-        let isActive = true; // Abort token
+        const workerCode = `
+          import { CardGroup, OddsCalculator } from 'https://esm.sh/@agonyz/poker-odds-calculator';
 
-        const runCalc = async () => {
-          try {
-            const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
-              const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
-              return getHandTier(hand) !== 4 ? hand : null;
-            })).filter(Boolean);
-
+          self.onmessage = function(e) {
+            const { hero, boardCards, survivingRange, deadCards } = e.data;
             let totalWin = 0, totalTie = 0, validCombos = 0;
-            const CHUNK_SIZE = 15; // Calculate 15 hands, then let UI breathe
 
-            for (let i = 0; i < survivingRange.length; i += CHUNK_SIZE) {
-              if (!isActive) return; // Instantly abort if user pressed a button
+            const expandHand = (handStr, usedCards) => {
+              const suits = ['h', 's', 'c', 'd'];
+              const combos = [];
+              const [r1, r2] = handStr;
+              if (handStr.length === 2) {
+                for (let i = 0; i < 4; i++) {
+                  for (let j = i + 1; j < 4; j++) {
+                    const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
+                    if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+                  }
+                }
+              } else if (handStr.includes('s')) {
+                for (let i = 0; i < 4; i++) {
+                  const c1 = r1 + suits[i]; const c2 = r2 + suits[i];
+                  if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+                }
+              } else {
+                for (let i = 0; i < 4; i++) {
+                  for (let j = 0; j < 4; j++) {
+                    if (i !== j) {
+                      const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
+                      if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+                    }
+                  }
+                }
+              }
+              return combos;
+            };
 
-              const chunk = survivingRange.slice(i, i + CHUNK_SIZE);
-              chunk.forEach(handStr => {
-                const combos = expandHand(handStr, deadCards);
-                combos.forEach(combo => {
-                  try {
-                    const p1 = CardGroup.fromString(hero.join(''));
-                    const p2 = CardGroup.fromString(combo.join(''));
-                    const b = CardGroup.fromString(boardCards.join(''));
-                    const res = OddsCalculator.calculate([p1, p2], b);
-                    totalWin += res.equities[0].getEquity();
-                    totalTie += res.equities[0].getTiePercentage();
-                    validCombos++;
-                  } catch (e) {}
-                });
+            survivingRange.forEach(handStr => {
+              const combos = expandHand(handStr, deadCards);
+              combos.forEach(combo => {
+                try {
+                  const p1 = CardGroup.fromString(hero.join(''));
+                  const p2 = CardGroup.fromString(combo.join(''));
+                  const b = CardGroup.fromString(boardCards.join(''));
+                  const res = OddsCalculator.calculate([p1, p2], b);
+                  totalWin += res.equities[0].getEquity();
+                  totalTie += res.equities[0].getTiePercentage();
+                  validCombos++;
+                } catch(err) {}
               });
-              
-              // Yield the main thread to keep UI at 60fps
-              await new Promise(resolve => setTimeout(resolve, 0));
-            }
+            });
 
-            if (!isActive) return;
-
-            if (validCombos === 0) {
-              setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
-            } else {
-              const w = totalWin / validCombos;
-              const t = totalTie / validCombos;
-              setEquity({ win: w, tie: t, lose: 100 - w - t, combos: validCombos });
-            }
-          } catch (err) {}
-          
-          if (isActive) setIsCalculating(false);
+            self.postMessage({ win: totalWin, tie: totalTie, combos: validCombos });
+          };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        workerRef.current = new Worker(URL.createObjectURL(blob), { type: 'module' });
+        
+        workerRef.current.onmessage = (e) => {
+          const { win, tie, combos } = e.data;
+          if (combos === 0) {
+            setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+          } else {
+            const finalWin = win / combos;
+            const finalTie = tie / combos;
+            setEquity({ win: finalWin, tie: finalTie, lose: 100 - finalWin - finalTie, combos });
+          }
+          setIsCalculating(false);
         };
 
-        runCalc();
+        return () => workerRef.current.terminate();
+      }, []);
 
-        // Cleanup function flips the abort token when inputs change
-        return () => { isActive = false; }; 
-      }, [hero, boardCards, preflopAction, flopAction, opponents, getHandTier, deadCards]);
+      // DISPATCH TO WORKER ON CHANGE
+      useEffect(() => {
+        if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
+        setIsCalculating(true);
+        
+        const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
+          const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
+          return getHandTier(hand) !== 4 ? hand : null;
+        })).filter(Boolean);
+
+        workerRef.current.postMessage({ hero, boardCards, survivingRange, deadCards });
+      }, [hero, boardCards, preflopAction, flopAction, turnAction, riverAction, opponents, getHandTier, deadCards]);
 
       const handleAssignCard = (card) => {
         if (!pickingSlot) return;
@@ -312,7 +322,6 @@
           </div>
 
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-3">
-            
             <div className="flex justify-between items-center mb-3 bg-black/40 p-1.5 rounded-lg border border-white/5">
               <span className="text-[9px] text-gray-400 uppercase tracking-widest pl-1">Opponents</span>
               <div className="flex gap-1">
@@ -325,6 +334,8 @@
             </div>
 
             <span className="text-[9px] uppercase tracking-widest text-gray-400 font-bold block mb-1.5">Action Line</span>
+            
+            {/* 2x2 Grid for Multi-Street Toggles */}
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
                 <span className="text-[9px] text-gray-400">Preflop</span>
@@ -333,11 +344,25 @@
                   <button onClick={() => setPreflopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${preflopAction === 'raise' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Raise</button>
                 </div>
               </div>
-              <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
+              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length >= 3 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
                 <span className="text-[9px] text-gray-400">Flop</span>
                 <div className="flex gap-0.5">
                   <button onClick={() => setFlopAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
                   <button onClick={() => setFlopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
+                </div>
+              </div>
+              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length >= 4 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
+                <span className="text-[9px] text-gray-400">Turn</span>
+                <div className="flex gap-0.5">
+                  <button onClick={() => setTurnAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${turnAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
+                  <button onClick={() => setTurnAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${turnAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
+                </div>
+              </div>
+              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length === 5 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
+                <span className="text-[9px] text-gray-400">River</span>
+                <div className="flex gap-0.5">
+                  <button onClick={() => setRiverAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${riverAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
+                  <button onClick={() => setRiverAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${riverAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
                 </div>
               </div>
             </div>
