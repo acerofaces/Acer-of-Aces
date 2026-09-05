@@ -82,7 +82,7 @@
         setOpponents(1);
       };
 
-      // V14 HEURISTIC: Trips/Quads Protection Logic
+      // V15 HEURISTIC: The 4-Flush Override
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -108,7 +108,6 @@
         const isSet = isPair && hit1;
         const isTwoPair = hit1 && hit2 && !isPair;
 
-        // V14: Dynamic Board Rank Counter to detect Trips and Quads for unpaired hole cards
         const bRankCounts = bRanks.reduce((acc, r) => { acc[r] = (acc[r] || 0) + 1; return acc; }, {});
         const isTripsOrBetter = isSet || (hit1 && bRankCounts[r1] >= 2) || (hit2 && bRankCounts[r2] >= 2);
 
@@ -176,11 +175,16 @@
           const dangerBoard = (is4Flush || isBoardPaired) && boardCards.length === 5;
           
           if (dangerBoard) {
-              // V14 FIX: isTripsOrBetter guarantees Quads survive the Danger Board purge
-              if (isTripsOrBetter) tier = 1; 
-              else if (isSuited && isMonotone && !is4Flush && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
-              else if (isMadeStraight && !is4Flush) tier = 2;
-              else if (isOverpair && !is4Flush) tier = 2;
+              // V15 FIX: 4-Flush Override. Force visual flush threat, actively demote Sets.
+              if (is4Flush) {
+                  if (isSuited && v1 <= 4) tier = 1;
+                  else if (isTripsOrBetter) tier = 3; 
+              } else {
+                  if (isTripsOrBetter) tier = 1; 
+                  else if (isSuited && isMonotone && !is4Flush && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
+                  else if (isMadeStraight && !is4Flush) tier = 2;
+                  else if (isOverpair && !is4Flush) tier = 2;
+              }
           } else {
               if (isMadeStraight) tier = 1;
               else if (isTripsOrBetter || isTwoPair || isOverpair) tier = 1;
@@ -213,6 +217,7 @@
           else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
           else if (isSuited) {
             if (is4Flush) {
+                if (v1 <= 4) tier = 3;
             } else if (isMonotone) {
                 if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 3;
             } else if (boardCards.length < 5 && touchesBoard) {
