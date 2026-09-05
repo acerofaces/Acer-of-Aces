@@ -82,7 +82,7 @@
         setOpponents(1);
       };
 
-      // V13 HEURISTIC: Sequential Cascade & 4-Flush Demotion
+      // V14 HEURISTIC: Trips/Quads Protection Logic
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -107,6 +107,10 @@
         
         const isSet = isPair && hit1;
         const isTwoPair = hit1 && hit2 && !isPair;
+
+        // V14: Dynamic Board Rank Counter to detect Trips and Quads for unpaired hole cards
+        const bRankCounts = bRanks.reduce((acc, r) => { acc[r] = (acc[r] || 0) + 1; return acc; }, {});
+        const isTripsOrBetter = isSet || (hit1 && bRankCounts[r1] >= 2) || (hit2 && bRankCounts[r2] >= 2);
 
         const highestBoardVal = Math.min(...bVals);
         const topBoardRank = RANKS[highestBoardVal];
@@ -172,14 +176,14 @@
           const dangerBoard = (is4Flush || isBoardPaired) && boardCards.length === 5;
           
           if (dangerBoard) {
-              if (isSet) tier = 1; 
-              // V13 FIX: Prevent 4-flush suit trap. Only promote suited hands on 3-flush monotone boards.
+              // V14 FIX: isTripsOrBetter guarantees Quads survive the Danger Board purge
+              if (isTripsOrBetter) tier = 1; 
               else if (isSuited && isMonotone && !is4Flush && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
               else if (isMadeStraight && !is4Flush) tier = 2;
               else if (isOverpair && !is4Flush) tier = 2;
           } else {
               if (isMadeStraight) tier = 1;
-              else if (isSet || isTwoPair || isOverpair) tier = 1;
+              else if (isTripsOrBetter || isTwoPair || isOverpair) tier = 1;
               else if (isTopPair && (v1 <= 2 || v2 <= 2)) tier = 2; 
               else if (isStraightDraw) tier = 2;
               else if (isSuited) {
@@ -197,7 +201,7 @@
           }
         } else {
           if (isMadeStraight) tier = 1;
-          else if (isSet || isTwoPair || isOverpair) tier = 1;
+          else if (isTripsOrBetter || isTwoPair || isOverpair) tier = 1;
           else if (isTopPair) tier = 2;
           else if (hit1 || hit2) {
              if (v1 <= bVals[1] || v2 <= bVals[1]) tier = 3; 
@@ -209,7 +213,6 @@
           else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
           else if (isSuited) {
             if (is4Flush) {
-                // V13 FIX: Actively ignore suited broadways if there's a 4-flush on board to prevent phantom equity
             } else if (isMonotone) {
                 if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 3;
             } else if (boardCards.length < 5 && touchesBoard) {
@@ -218,7 +221,6 @@
           }
         }
 
-        // V13 FIX: Sequential Cascade correctly flips the order to prevent hands sticking in Tier 3
         if (opponents >= 5 && tier === 2) tier = 3;
         if (opponents >= 3 && tier === 3) tier = 4;
 
