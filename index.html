@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>King Slayer Ultra</title>
+  
+  <!-- Web App Manifest (Data URI for Standalone Mobile Install) -->
+  <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer Odds Calculator Ultra","short_name":"KingSlayer","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React 18 & Babel Standalone -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- ESM Poker Evaluator Package -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@agonyz/poker-odds-calculator": "https://esm.sh/@agonyz/poker-odds-calculator"
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #0a0a0a;
+      margin: 0;
+      padding: 0;
+      color: white;
+      font-family: system-ui, -apple-system, sans-serif;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    import { CardGroup, OddsCalculator } from '@agonyz/poker-odds-calculator';
+    const { useState, useEffect, useMemo } = React;
+
+    const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+    const SUITS = [
+      { id: 'h', symbol: '♥', color: 'text-red-500', name: 'Hearts' },
+      { id: 'd', symbol: '♦', color: 'text-blue-400', name: 'Diamonds' },
+      { id: 'c', symbol: '♣', color: 'text-emerald-400', name: 'Clubs' },
+      { id: 's', symbol: '♠', color: 'text-gray-300', name: 'Spades' }
+    ];
+
+    function App() {
+      // Hands & Board State
+      const [hero, setHero] = useState(['Ad', 'Kc']);
+      const [flop, setFlop] = useState(['Ah', 'Qd', 'Th']);
+      const [turn, setTurn] = useState(null);
+      const [river, setRiver] = useState(null);
+
+      // Actions
+      const [preflopAction, setPreflopAction] = useState('call'); // 'call' | 'raise'
+      const [flopAction, setFlopAction] = useState('check_call'); // 'check_call' | 'raise'
+      const [turnAction, setTurnAction] = useState('check_call');
+      const [riverAction, setRiverAction] = useState('check_call');
+
+      // Modal Picker State
+      const [pickingSlot, setPickingSlot] = useState(null); // { type: 'hero'|'flop'|'turn'|'river', index: 0 }
+      const [selectedRank, setSelectedRank] = useState('A');
+
+      // Output state
+      const [equity, setEquity] = useState({ win: 0, tie: 0, lose: 0, combos: 0 });
+      const [isCalculating, setIsCalculating] = useState(false);
+
+      const boardCards = useMemo(() => {
+        const b = [...flop];
+        if (turn) b.push(turn);
+        if (river) b.push(river);
+        return b.filter(Boolean);
+      }, [flop, turn, river]);
+
+      const deadCards = useMemo(() => {
+        return [...hero.filter(Boolean), ...boardCards];
+      }, [hero, boardCards]);
+
+      // Hand Classifier based on Board Texture & Action Line
+      const getHandTier = (hand) => {
+        if (boardCards.length < 3) {
+          // Preflop baseline
+          if (['AA', 'KK', 'QQ', 'AKs', 'AKo'].includes(hand)) return 1;
+          if (['JJ', 'TT', 'AQs', 'AQo', 'AJs', 'KQs'].includes(hand)) return 2;
+          if (['99', '88', '77', 'ATs', 'KJs', 'QJs', 'JTs'].includes(hand)) return 3;
+          return preflopAction === 'raise' ? 4 : (hand.includes('s') ? 3 : 4);
+        }
+
+        const bRanks = boardCards.map(c => c[0]);
+        const bSuits = boardCards.map(c => c[1]);
+        const [r1, r2] = hand;
+
+        // Nut Straights & Sets
+        const isKJ = (r1 === 'K' && r2 === 'J') || (r1 === 'J' && r2 === 'K');
+        const isSet = (r1 === r2) && bRanks.includes(r1);
+        const isTwoPair = bRanks.includes(r1) && bRanks.includes(r2) && r1 !== r2;
+
+        if (isKJ || isSet || isTwoPair) return 1;
+
+        // Pairs & Draws
+        const hasTopBoardRank = r1 === bRanks[0] || r2 === bRanks[0];
+        const hasHeartFlushDraw = hand.includes('s') && bSuits.filter(s => s === 'h').length >= 2;
+        const isOpenEnded = (hand.startsWith('JT') || hand.startsWith('J9') || hand.startsWith('KT'));
+
+        if (hasTopBoardRank || hasHeartFlushDraw || isOpenEnded) return 2;
+
+        // Marginal holdings
+        const hasSecondPair = r1 === bRanks[1] || r2 === bRanks[1];
+        if (hasSecondPair || hand.includes('s')) return 3;
+
+        // Air & Dead Underpairs
+        return 4;
+      };
+
+      const expandHand = (handStr, usedCards) => {
+        const suits = ['h', 's', 'c', 'd'];
+        const combos = [];
+        const [r1, r2] = handStr;
+        if (handStr.length === 2) {
+          for (let i = 0; i < 4; i++) {
+            for (let j = i + 1; j < 4; j++) {
+              const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
+              if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+            }
+          }
+        } else if (handStr.includes('s')) {
+          for (let i = 0; i < 4; i++) {
+            const c1 = r1 + suits[i]; const c2 = r2 + suits[i];
+            if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+          }
+        } else {
+          for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+              if (i !== j) {
+                const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
+                if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
+              }
+            }
+          }
+        }
+        return combos;
+      };
+
+      // Recalculate Equity
+      useEffect(() => {
+        if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
+        setIsCalculating(true);
+
+        const runCalc = () => {
+          try {
+            const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
+              const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
+              return getHandTier(hand) !== 4 ? hand : null;
+            })).filter(Boolean);
+
+            let totalWin = 0, totalTie = 0, validCombos = 0;
+
+            survivingRange.forEach(handStr => {
+              const combos = expandHand(handStr, deadCards);
+              combos.forEach(combo => {
+                try {
+                  const p1 = CardGroup.fromString(hero.join(''));
+                  const p2 = CardGroup.fromString(combo.join(''));
+                  const b = CardGroup.fromString(boardCards.join(''));
+                  const res = OddsCalculator.calculate([p1, p2], b);
+                  totalWin += res.equities[0].getEquity();
+                  totalTie += res.equities[0].getTiePercentage();
+                  validCombos++;
+                } catch (e) {}
+              });
+            });
+
+            if (validCombos === 0) {
+              setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+            } else {
+              const w = totalWin / validCombos;
+              const t = totalTie / validCombos;
+              setEquity({ win: w, tie: t, lose: 100 - w - t, combos: validCombos });
+            }
+          } catch (err) {
+            console.error(err);
+          }
+          setIsCalculating(false);
+        };
+
+        const timer = setTimeout(runCalc, 80);
+        return () => clearTimeout(timer);
+      }, [hero, boardCards, preflopAction, flopAction, turnAction, riverAction]);
+
+      const handleAssignCard = (card) => {
+        if (!pickingSlot) return;
+        const { type, index } = pickingSlot;
+        if (type === 'hero') {
+          const next = [...hero]; next[index] = card; setHero(next);
+        } else if (type === 'flop') {
+          const next = [...flop]; next[index] = card; setFlop(next);
+        } else if (type === 'turn') {
+          setTurn(card);
+        } else if (type === 'river') {
+          setRiver(card);
+        }
+        setPickingSlot(null);
+      };
+
+      const handleClearCard = (type, index) => {
+        if (type === 'hero') {
+          const next = [...hero]; next[index] = null; setHero(next);
+        } else if (type === 'flop') {
+          const next = [...flop]; next[index] = null; setFlop(next);
+        } else if (type === 'turn') {
+          setTurn(null);
+        } else if (type === 'river') {
+          setRiver(null);
+        }
+      };
+
+      const renderCardBadge = (card, onClick, onClear) => {
+        if (!card) {
+          return (
+            <button 
+              onClick={onClick} 
+              className="w-11 h-14 rounded-lg border border-dashed border-white/20 bg-white/5 flex items-center justify-center text-xs text-white/40 active:scale-95 transition-transform"
+            >
+              +
+            </button>
+          );
+        }
+        const rank = card.slice(0, -1);
+        const suit = SUITS.find(s => s.id === card.slice(-1));
+        return (
+          <div className="relative group">
+            <button 
+              onClick={onClick}
+              className="w-11 h-14 rounded-lg bg-[#1a1a1a] border border-white/20 flex flex-col items-center justify-center font-bold text-sm shadow-md active:scale-95 transition-transform"
+            >
+              <span className="leading-tight">{rank}</span>
+              <span className={`text-base leading-none ${suit?.color}`}>{suit?.symbol}</span>
+            </button>
+            <button 
+              onClick={(e) => { e.stopPropagation(); onClear(); }}
+              className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[9px] flex items-center justify-center font-bold"
+            >
+              ×
+            </button>
+          </div>
+        );
+      };
+
+      const renderMatrixCell = (r1, r2, i, j) => {
+        const isSuited = i < j;
+        const hand = i === j ? `${r1}${r2}` : isSuited ? `${r1}${r2}s` : `${r2}${r1}o`;
+        const tier = getHandTier(hand);
+
+        let style = "bg-[#121212] text-white/25 opacity-40";
+        if (tier === 1) style = "bg-white text-black font-bold shadow-[0_0_8px_#00E599]";
+        if (tier === 2) style = "bg-[#00E599] text-black font-semibold";
+        if (tier === 3) style = "bg-[#00A3FF]/80 text-white";
+
+        return (
+          <div key={hand} className={`w-[25px] h-[25px] flex items-center justify-center text-[7.5px] rounded-sm transition-all ${style}`}>
+            {hand}
+          </div>
+        );
+      };
+
+      return (
+        <div className="max-w-[410px] min-h-screen mx-auto bg-[#0a0a0a] text-white p-4 pb-20 relative">
+          {/* Header */}
+          <div className="flex justify-between items-center mb-4 pt-2">
+            <div>
+              <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5">
+                <span className="text-[#00E599]">♠</span> KING SLAYER
+              </h1>
+              <p className="text-[9px] text-gray-500 tracking-[0.25em]">ODDS CALCULATOR ULTRA</p>
+            </div>
+            <button 
+              onClick={() => { setHero(['Ad', 'Kc']); setFlop(['Ah', 'Qd', 'Th']); setTurn(null); setRiver(null); }}
+              className="px-2.5 py-1 bg-white/5 border border-white/10 rounded-md text-[10px] text-gray-400 active:bg-white/10"
+            >
+              Reset Test 1
+            </button>
+          </div>
+
+          {/* Card Slots Bar */}
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-4">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Hero Hand</span>
+              <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Board Cards</span>
+            </div>
+            <div className="flex justify-between items-center">
+              {/* Hero */}
+              <div className="flex gap-1.5">
+                {renderCardBadge(hero[0], () => setPickingSlot({ type: 'hero', index: 0 }), () => handleClearCard('hero', 0))}
+                {renderCardBadge(hero[1], () => setPickingSlot({ type: 'hero', index: 1 }), () => handleClearCard('hero', 1))}
+              </div>
+              <div className="h-8 w-[1px] bg-white/10 mx-2" />
+              {/* Board */}
+              <div className="flex gap-1.5">
+                {renderCardBadge(flop[0], () => setPickingSlot({ type: 'flop', index: 0 }), () => handleClearCard('flop', 0))}
+                {renderCardBadge(flop[1], () => setPickingSlot({ type: 'flop', index: 1 }), () => handleClearCard('flop', 1))}
+                {renderCardBadge(flop[2], () => setPickingSlot({ type: 'flop', index: 2 }), () => handleClearCard('flop', 2))}
+                {renderCardBadge(turn, () => setPickingSlot({ type: 'turn', index: 0 }), () => handleClearCard('turn', 0))}
+                {renderCardBadge(river, () => setPickingSlot({ type: 'river', index: 0 }), () => handleClearCard('river', 0))}
+              </div>
+            </div>
+          </div>
+
+          {/* Villain Action Funneling */}
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-4">
+            <span className="text-[10px] uppercase tracking-widest text-gray-400 font-bold block mb-2">Villain Action Funnel</span>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="flex items-center justify-between bg-black/40 px-2 py-1.5 rounded-lg border border-white/5">
+                <span className="text-[10px] text-gray-400">Preflop</span>
+                <div className="flex gap-1">
+                  <button onClick={() => setPreflopAction('call')} className={`px-2 py-0.5 rounded text-[10px] ${preflopAction === 'call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-400'}`}>Call</button>
+                  <button onClick={() => setPreflopAction('raise')} className={`px-2 py-0.5 rounded text-[10px] ${preflopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-400'}`}>Raise</button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between bg-black/40 px-2 py-1.5 rounded-lg border border-white/5">
+                <span className="text-[10px] text-gray-400">Flop</span>
+                <div className="flex gap-1">
+                  <button onClick={() => setFlopAction('check_call')} className={`px-2 py-0.5 rounded text-[10px] ${flopAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-400'}`}>Check</button>
+                  <button onClick={() => setFlopAction('raise')} className={`px-2 py-0.5 rounded text-[10px] ${flopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-400'}`}>Raise</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Equity Output Bars */}
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl mb-4 shadow-2xl">
+            <div className="mb-3">
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-[#00E599] tracking-wider">WIN</span>
+                <span className="text-[#00E599]">{isCalculating ? 'CALC...' : `${equity.win.toFixed(1)}%`}</span>
+              </div>
+              <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
+                <div className="h-full bg-[#00E599] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.win}%` }} />
+              </div>
+            </div>
+            <div className="mb-3">
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-[#00A3FF] tracking-wider">TIE</span>
+                <span className="text-[#00A3FF]">{isCalculating ? '--' : `${equity.tie.toFixed(1)}%`}</span>
+              </div>
+              <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
+                <div className="h-full bg-[#00A3FF] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.tie}%` }} />
+              </div>
+            </div>
+            <div>
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-[#FF0055] tracking-wider">LOSE</span>
+                <span className="text-[#FF0055]">{isCalculating ? '--' : `${equity.lose.toFixed(1)}%`}</span>
+              </div>
+              <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
+                <div className="h-full bg-[#FF0055] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.lose}%` }} />
+              </div>
+            </div>
+          </div>
+
+          {/* 13x13 Heatmap */}
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-6">
+            <div className="flex justify-between text-[9px] uppercase tracking-widest text-gray-400 mb-3">
+              <span>Villain Range Matrix</span>
+              <span className="text-[#00A3FF] font-bold">{isCalculating ? '...' : `${equity.combos} Combos`}</span>
+            </div>
+            <div className="grid gap-[2px] mx-auto" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr))' }}>
+              {RANKS.map((r1, i) => RANKS.map((r2, j) => renderMatrixCell(r1, r2, i, j)))}
+            </div>
+          </div>
+
+          {/* Interactive Card Picker Modal */}
+          {pickingSlot && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex flex-col justify-end">
+              <div className="bg-[#141414] border-t border-white/10 p-4 rounded-t-2xl max-w-[410px] mx-auto w-full">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-xs uppercase tracking-widest text-gray-300 font-bold">Select Card</span>
+                  <button onClick={() => setPickingSlot(null)} className="text-sm text-gray-400 px-2 py-1">Close</button>
+                </div>
+
+                {/* Ranks */}
+                <div className="grid grid-cols-7 gap-1.5 mb-3">
+                  {RANKS.map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setSelectedRank(r)}
+                      className={`h-9 rounded font-bold text-xs ${selectedRank === r ? 'bg-[#00E599] text-black shadow-md' : 'bg-white/5 text-white'}`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Suits */}
+                <div className="grid grid-cols-4 gap-2">
+                  {SUITS.map(s => {
+                    const cardKey = selectedRank + s.id;
+                    const isTaken = deadCards.includes(cardKey);
+                    return (
+                      <button
+                        key={s.id}
+                        disabled={isTaken}
+                        onClick={() => handleAssignCard(cardKey)}
+                        className={`h-11 rounded-lg border flex items-center justify-center gap-1.5 text-base font-bold ${
+                          isTaken ? 'opacity-20 border-transparent bg-white/5 cursor-not-allowed' : 'border-white/10 bg-white/5 active:bg-white/10'
+                        }`}
+                      >
+                        <span>{selectedRank}</span>
+                        <span className={s.color}>{s.symbol}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
