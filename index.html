@@ -82,7 +82,7 @@
         setOpponents(1);
       };
 
-      // V10 HEURISTIC: The Overpair Patch
+      // V11 HEURISTIC: Nut Flush Draw Rescue Protocol
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -112,8 +112,6 @@
         const topBoardRank = RANKS[highestBoardVal];
         const isTopPair = r1 === topBoardRank || r2 === topBoardRank;
         
-        // V10: The Overpair Logic
-        // Since lower index = higher card, v1 < highestBoardVal means the pair is strictly higher than the top board card
         const isOverpair = isPair && (v1 < highestBoardVal);
         
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
@@ -171,12 +169,16 @@
 
         if (isRaised) {
           if (isMadeStraight) tier = 1;
-          // V10 FIX: Overpairs are safely tiered as elite value hands
           else if (isSet || isTwoPair || isOverpair) tier = 1;
           else if (isTopPair && (v1 <= 2 || v2 <= 2)) tier = 2; 
           else if (isStraightDraw) tier = 2;
-          else if (isSuited && Math.abs(v1 - v2) <= 2 && boardCards.length < 5 && v1 <= 5) {
-            if (!isMonotone || (v1 <= 4 && v2 <= 4)) tier = 2; 
+          else if (isSuited && boardCards.length < 5) {
+            if (isMonotone) {
+                // V11 FIX: Rescue Nut & King-high flush draws! (v1 <= 1)
+                if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 2; 
+            } else if (Math.abs(v1 - v2) <= 2 && v1 <= 5) {
+                tier = 2;
+            }
           }
         } else {
           if (isMadeStraight) tier = 1;
@@ -191,7 +193,11 @@
           else if (isStraightDraw) tier = 3;
           else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
           else if (isSuited && touchesBoard && boardCards.length < 5) {
-            if (!isMonotone || (v1 <= 4 && v2 <= 4)) tier = 3;
+            if (isMonotone) {
+                if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 3;
+            } else {
+                tier = 3;
+            }
           }
         }
 
