@@ -66,16 +66,57 @@
 
       const deadCards = useMemo(() => [...hero.filter(Boolean), ...boardCards], [hero, boardCards]);
 
-      // Reverted to the precise explicit logic to guarantee the 246 combo math
+      const handleReset = () => {
+        setHero([null, null]);
+        setFlop([null, null, null]);
+        setTurn(null);
+        setRiver(null);
+        setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+      };
+
+      // DYNAMIC HEURISTIC ENGINE: Reads board texture & reacts to Action/Opponents
       const getHandTier = (hand) => {
-        const tier1 = ['KJo', 'KJs', 'TT', 'AQo', 'AQs', 'ATo', 'ATs', 'QTo', 'QTs', 'QQ', 'AA'];
-        const tier2 = ['AKo', 'AKs', 'AJo', 'AJs', 'A9o', 'A9s', 'JTo', 'JTs', 'J9o', 'J9s', 'KTo', 'KTs'];
-        const tier3 = ['KQo', 'KQs', 'QJo', 'QJs', 'A8o', 'A8s', 'A7o', 'A7s', 'A6o', 'A6s', 'A5o', 'A5s', 'A4o', 'A4s', 'A3o', 'A3s', 'A2o', 'A2s', 'K9o', 'K9s', 'T9o', 'T9s', 'T8o', 'T8s', '98o', '98s', '88', '99', 'JJ'];
+        if (boardCards.length < 3) {
+          if (preflopAction === 'raise') return (hand.includes('s') || hand[0] === hand[1]) ? 2 : 4;
+          return 3;
+        }
+
+        const bRanks = boardCards.map(c => c[0]);
+        const bVals = bRanks.map(r => RANKS.indexOf(r));
+        const [r1, r2] = hand;
+        const isPair = r1 === r2;
+        const v1 = RANKS.indexOf(r1);
+        const v2 = RANKS.indexOf(r2);
+
+        const match1 = bRanks.includes(r1);
+        const match2 = bRanks.includes(r2);
         
-        if (tier1.includes(hand)) return 1;
-        if (tier2.includes(hand)) return 2;
-        if (tier3.includes(hand)) return 3;
-        return 4; 
+        const isSet = isPair && match1;
+        const isTwoPair = match1 && match2 && !isPair;
+        const isTopPair = r1 === bRanks[0] || r2 === bRanks[0];
+        const isOverPair = isPair && v1 < Math.min(...bVals);
+
+        const isConnector = Math.abs(v1 - v2) <= 2;
+        const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 1) || bVals.some(bv => Math.abs(v2 - bv) <= 1);
+
+        let tier = 4;
+
+        if (flopAction === 'raise') {
+          // Villain raises: Only monsters and big combo draws survive
+          if (isSet || isTwoPair || (isConnector && touchesBoard)) tier = 1;
+          else if (isOverPair || isTopPair || (touchesBoard && hand.includes('s'))) tier = 2;
+        } else {
+          // Villain checks/calls: Wider range survives
+          if (isSet || isTwoPair || isOverPair) tier = 1;
+          else if (isTopPair || touchesBoard) tier = 2;
+          else if (match1 || match2 || isPair) tier = 3;
+        }
+
+        // Multi-way scaling: Matrix tightens when opponents increase
+        if (opponents >= 3 && tier === 3) tier = 4;
+        if (opponents >= 5 && tier === 2) tier = 3;
+
+        return tier;
       };
 
       const expandHand = (handStr, usedCards) => {
@@ -107,6 +148,7 @@
         return combos;
       };
 
+      // Hook now listens to EVERY toggle (Action, Opponents, Cards)
       useEffect(() => {
         if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
         setIsCalculating(true);
@@ -146,7 +188,7 @@
           setIsCalculating(false);
         };
         setTimeout(runCalc, 50);
-      }, [hero, boardCards]);
+      }, [hero, boardCards, preflopAction, flopAction, opponents]); // <-- The fix
 
       const handleAssignCard = (card) => {
         if (!pickingSlot) return;
@@ -197,7 +239,7 @@
         if (tier === 3) style = "bg-[#00A3FF]/80 text-white";
 
         return (
-          <div key={hand} className={`w-[24px] h-[24px] flex items-center justify-center text-[7.5px] rounded-sm transition-all ${style}`}>
+          <div key={hand} className={`w-[24px] h-[24px] flex items-center justify-center text-[7.5px] rounded-sm transition-all duration-300 ${style}`}>
             {hand}
           </div>
         );
@@ -213,11 +255,15 @@
             </div>
           </div>
 
-          {/* Card Slots - Fixed for Viewport Overflow */}
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-3 w-full">
-            <div className="flex justify-between items-center mb-1.5">
-              <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Hero</span>
-              <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Board</span>
+            <div className="flex justify-between items-center mb-2">
+              <div className="flex gap-4">
+                <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Hero</span>
+                <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Board</span>
+              </div>
+              <button onClick={handleReset} className="text-[8px] text-[#FF0055] border border-[#FF0055]/30 px-2 py-0.5 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
+                Clear Hand
+              </button>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex gap-1">
@@ -235,7 +281,6 @@
             </div>
           </div>
 
-          {/* Opponents & Actions */}
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-3">
             
             <div className="flex justify-between items-center mb-3 bg-black/40 p-1.5 rounded-lg border border-white/5">
@@ -254,21 +299,20 @@
               <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
                 <span className="text-[9px] text-gray-400">Preflop</span>
                 <div className="flex gap-0.5">
-                  <button onClick={() => setPreflopAction('call')} className={`px-2 py-1 rounded text-[9px] ${preflopAction === 'call' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Call</button>
-                  <button onClick={() => setPreflopAction('raise')} className={`px-2 py-1 rounded text-[9px] ${preflopAction === 'raise' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Raise</button>
+                  <button onClick={() => setPreflopAction('call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${preflopAction === 'call' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Call</button>
+                  <button onClick={() => setPreflopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${preflopAction === 'raise' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Raise</button>
                 </div>
               </div>
               <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
                 <span className="text-[9px] text-gray-400">Flop</span>
                 <div className="flex gap-0.5">
-                  <button onClick={() => setFlopAction('check_call')} className={`px-2 py-1 rounded text-[9px] ${flopAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
-                  <button onClick={() => setFlopAction('raise')} className={`px-2 py-1 rounded text-[9px] ${flopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
+                  <button onClick={() => setFlopAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
+                  <button onClick={() => setFlopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Equity Outputs */}
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl mb-3 shadow-2xl">
             <div className="mb-3">
               <div className="flex justify-between text-xs font-bold mb-1">
@@ -299,7 +343,6 @@
             </div>
           </div>
 
-          {/* Matrix */}
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-4">
             <div className="flex justify-between text-[9px] uppercase tracking-widest text-gray-400 mb-2.5">
               <span>Villain Matrix</span>
@@ -310,13 +353,12 @@
             </div>
           </div>
 
-          {/* Card Picker */}
           {pickingSlot && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex flex-col justify-end">
               <div className="bg-[#141414] border-t border-white/10 p-4 rounded-t-2xl w-full max-w-[410px] mx-auto pb-8">
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-xs uppercase tracking-widest text-gray-300 font-bold">Select Card</span>
-                  <button onClick={() => setPickingSlot(null)} className="text-xs text-gray-400">Close</button>
+                  <button onClick={() => setPickingSlot(null)} className="text-xs text-gray-400 border border-white/10 px-3 py-1 rounded">Close</button>
                 </div>
                 <div className="grid grid-cols-7 gap-1.5 mb-3">
                   {RANKS.map(r => (
@@ -328,7 +370,7 @@
                     const cardKey = selectedRank + s.id;
                     const isTaken = deadCards.includes(cardKey);
                     return (
-                      <button key={s.id} disabled={isTaken} onClick={() => handleAssignCard(cardKey)} className={`h-11 rounded-lg border flex items-center justify-center gap-1.5 text-base font-bold ${isTaken ? 'opacity-20 border-transparent bg-white/5 cursor-not-allowed' : 'border-white/10 bg-white/5 active:bg-white/10'}`}>
+                      <button key={s.id} disabled={isTaken} onClick={() => handleAssignCard(cardKey)} className={`h-11 rounded-lg border flex items-center justify-center gap-1.5 text-base font-bold transition-transform ${isTaken ? 'opacity-20 border-transparent bg-white/5 cursor-not-allowed' : 'border-white/10 bg-white/5 active:bg-white/10 active:scale-95'}`}>
                         <span>{selectedRank}</span><span className={s.color}>{s.symbol}</span>
                       </button>
                     );
