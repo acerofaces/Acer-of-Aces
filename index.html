@@ -74,20 +74,29 @@
         setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
       };
 
-      // STRICT BAYESIAN HEURISTIC: Aggressively purges dead air to maintain true GTO combos
+      // V2 HEURISTIC: GTO Preflop Gating + Strict Postflop
       const getHandTier = useCallback((hand) => {
-        if (boardCards.length < 3) {
-          if (preflopAction === 'raise') return (hand.includes('s') || hand[0]===hand[1]) ? 2 : 4;
-          return 3;
-        }
+        const [r1, r2] = hand;
+        const v1 = RANKS.indexOf(r1); 
+        const v2 = RANKS.indexOf(r2);
+        const isPair = r1 === r2;
+        const isSuited = hand.includes('s');
 
+        // 1. STRICT PREFLOP GATEKEEPER (Purges ~70% of trash hands immediately)
+        let isPlayablePreflop = false;
+        if (isPair) isPlayablePreflop = true; // All pairs
+        else if (isSuited && v1 <= 4) isPlayablePreflop = true; // Axs, Kxs, Qxs, Jxs, Txs
+        else if (isSuited && Math.abs(v1 - v2) <= 3) isPlayablePreflop = true; // Suited connectors/gappers
+        else if (!isSuited && v1 <= 2 && v2 <= 3) isPlayablePreflop = true; // Premium offsuit (AQo, AJo, KQo)
+        else if (!isSuited && Math.abs(v1 - v2) === 1 && v1 <= 4) isPlayablePreflop = true; // High offsuit connectors (JTo)
+        
+        if (!isPlayablePreflop) return 4; // Kill A2o, K4o, etc. instantly.
+        
+        if (boardCards.length < 3) return 3; // If only preflop, surviving hands are Tier 3.
+
+        // 2. POSTFLOP LOGIC (Only applies to mathematically sound starting hands)
         const bRanks = boardCards.map(c => c[0]);
         const bVals = bRanks.map(r => RANKS.indexOf(r));
-        const [r1, r2] = hand;
-        const v1 = RANKS.indexOf(r1);
-        const v2 = RANKS.indexOf(r2);
-        
-        const isPair = r1 === r2;
         const hit1 = bRanks.includes(r1);
         const hit2 = bRanks.includes(r2);
         
@@ -95,35 +104,32 @@
         const isTwoPair = hit1 && hit2 && !isPair;
         const isTopPair = r1 === bRanks[0] || r2 === bRanks[0];
         
-        // Strict Proximity: Does it actually interact with the board?
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
 
         if (flopAction === 'raise') {
           if (isSet || isTwoPair) return 1;
           if (isTopPair && touchesBoard) return 2;
-          if (hand.includes('s') && v1 <= 4 && touchesBoard) return 2; // Premium draws only
+          if (isSuited && v1 <= 4 && touchesBoard) return 2;
           return 4; 
         } else {
-          // Check/Call Funnel
+          // Check/Call
           if (isSet || isTwoPair) return 1;
           if (isTopPair) return 2;
           
           if (hit1 || hit2) {
-             if (v1 <= bVals[1] || v2 <= bVals[1]) return 3; // Keep middle pair
+             if (v1 <= bVals[1] || v2 <= bVals[1]) return 3; 
              return 4; // Purge weak bottom pairs
           }
           if (isPair) {
-             if (v1 < Math.max(...bVals)) return 3; // High pocket pair
-             return 4; // Purge dead underpairs (e.g., 22 on A-Q-T)
+             if (v1 < Math.max(...bVals)) return 3; 
+             return 4; // Purge dead underpairs 
           }
+          if (v1 <= 4 && v2 <= 5 && touchesBoard) return 3; 
+          if (isSuited && touchesBoard) return 3; 
           
-          // Pure draws (Unpaired, didn't hit)
-          if (v1 <= 4 && v2 <= 5 && touchesBoard) return 3; // Broadway connectors (K-J on A-Q-T)
-          if (hand.includes('s') && touchesBoard && v1 <= 6) return 3; // Strong suited connectors
-          
-          return 4; // Purge all disconnected air (9-4 offsuit, etc.)
+          return 4; // Purge missed air
         }
-      }, [boardCards, preflopAction, flopAction]);
+      }, [boardCards, flopAction]);
 
       const expandHand = (handStr, usedCards) => {
         const suits = ['h', 's', 'c', 'd'];
@@ -154,25 +160,28 @@
         return combos;
       };
 
+      // ASYNC CHUNKING: Prevents UI freezes and allows instant button taps
       useEffect(() => {
         if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
         
         setIsCalculating(true);
-        setEquity({ win: 0, tie: 0, lose: 0, combos: 0 }); // Clear output immediately
+        let isActive = true; // Abort token
 
-        // requestAnimationFrame forces the browser to render the "CALC..." UI
-        // before the heavy math loop blocks the thread. Prevents freezing.
-        requestAnimationFrame(() => {
-          setTimeout(() => {
-            try {
-              const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
-                const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
-                return getHandTier(hand) !== 4 ? hand : null;
-              })).filter(Boolean);
+        const runCalc = async () => {
+          try {
+            const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
+              const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
+              return getHandTier(hand) !== 4 ? hand : null;
+            })).filter(Boolean);
 
-              let totalWin = 0, totalTie = 0, validCombos = 0;
+            let totalWin = 0, totalTie = 0, validCombos = 0;
+            const CHUNK_SIZE = 15; // Calculate 15 hands, then let UI breathe
 
-              survivingRange.forEach(handStr => {
+            for (let i = 0; i < survivingRange.length; i += CHUNK_SIZE) {
+              if (!isActive) return; // Instantly abort if user pressed a button
+
+              const chunk = survivingRange.slice(i, i + CHUNK_SIZE);
+              chunk.forEach(handStr => {
                 const combos = expandHand(handStr, deadCards);
                 combos.forEach(combo => {
                   try {
@@ -186,19 +195,30 @@
                   } catch (e) {}
                 });
               });
+              
+              // Yield the main thread to keep UI at 60fps
+              await new Promise(resolve => setTimeout(resolve, 0));
+            }
 
-              if (validCombos === 0) {
-                setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
-              } else {
-                const w = totalWin / validCombos;
-                const t = totalTie / validCombos;
-                setEquity({ win: w, tie: t, lose: 100 - w - t, combos: validCombos });
-              }
-            } catch (err) {}
-            setIsCalculating(false);
-          }, 10);
-        });
-      }, [hero, boardCards, preflopAction, flopAction, opponents, getHandTier]);
+            if (!isActive) return;
+
+            if (validCombos === 0) {
+              setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+            } else {
+              const w = totalWin / validCombos;
+              const t = totalTie / validCombos;
+              setEquity({ win: w, tie: t, lose: 100 - w - t, combos: validCombos });
+            }
+          } catch (err) {}
+          
+          if (isActive) setIsCalculating(false);
+        };
+
+        runCalc();
+
+        // Cleanup function flips the abort token when inputs change
+        return () => { isActive = false; }; 
+      }, [hero, boardCards, preflopAction, flopAction, opponents, getHandTier, deadCards]);
 
       const handleAssignCard = (card) => {
         if (!pickingSlot) return;
@@ -327,7 +347,7 @@
             <div className="mb-3">
               <div className="flex justify-between text-xs font-bold mb-1">
                 <span className="text-[#00E599] tracking-wider">WIN</span>
-                <span className="text-[#00E599]">{isCalculating ? 'CALC...' : `${equity.win.toFixed(1)}%`}</span>
+                <span className="text-[#00E599]">{isCalculating ? 'CALCULATING...' : `${equity.win.toFixed(1)}%`}</span>
               </div>
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
                 <div className="h-full bg-[#00E599] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.win}%` }} />
