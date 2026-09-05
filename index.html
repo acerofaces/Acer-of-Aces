@@ -48,7 +48,6 @@
       const [river, setRiver] = useState(null);
       const [opponents, setOpponents] = useState(1);
 
-      // Multi-Street Action Toggles
       const [preflopAction, setPreflopAction] = useState('call');
       const [flopAction, setFlopAction] = useState('check_call');
       const [turnAction, setTurnAction] = useState('check_call');
@@ -80,9 +79,10 @@
         setFlopAction('check_call');
         setTurnAction('check_call');
         setRiverAction('check_call');
+        setOpponents(1);
       };
 
-      // V3 HEURISTIC: Multi-Street Threat Escalation 
+      // V4 HEURISTIC: Multi-Street + Multi-Way Field Scaling
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -90,7 +90,6 @@
         const isPair = r1 === r2;
         const isSuited = hand.includes('s');
 
-        // STRICT PREFLOP GATEKEEPER
         let isPlayablePreflop = false;
         if (isPair) isPlayablePreflop = true; 
         else if (isSuited && v1 <= 4) isPlayablePreflop = true; 
@@ -101,7 +100,6 @@
         if (!isPlayablePreflop) return 4; 
         if (boardCards.length < 3) return 3; 
 
-        // MULTI-STREET ESCALATION LOGIC
         const bRanks = boardCards.map(c => c[0]);
         const bVals = bRanks.map(r => RANKS.indexOf(r));
         const hit1 = bRanks.includes(r1);
@@ -112,38 +110,37 @@
         const isTopPair = r1 === bRanks[0] || r2 === bRanks[0];
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
 
-        // Calculate the maximum aggression across dealt streets
         let isRaised = false;
         if (boardCards.length >= 3 && flopAction === 'raise') isRaised = true;
         if (boardCards.length >= 4 && turnAction === 'raise') isRaised = true;
         if (boardCards.length === 5 && riverAction === 'raise') isRaised = true;
 
-        if (isRaised) {
-          // If villain raises on ANY active street, enforce strict tiering
-          if (isSet || isTwoPair) return 1;
-          if (isTopPair && touchesBoard) return 2;
-          if (isSuited && v1 <= 4 && touchesBoard && boardCards.length < 5) return 2; // Draws die on the river
-          return 4; 
-        } else {
-          // Check/Call Funnel
-          if (isSet || isTwoPair) return 1;
-          if (isTopPair) return 2;
-          if (hit1 || hit2) {
-             if (v1 <= bVals[1] || v2 <= bVals[1]) return 3; 
-             return 4; 
-          }
-          if (isPair) {
-             if (v1 < Math.max(...bVals)) return 3; 
-             return 4; 
-          }
-          if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) return 3; 
-          if (isSuited && touchesBoard && boardCards.length < 5) return 3; 
-          
-          return 4; 
-        }
-      }, [boardCards, flopAction, turnAction, riverAction]);
+        let tier = 4;
 
-      // INLINE MODULE WEB WORKER SETUP (Runs exactly once on mount)
+        if (isRaised) {
+          if (isSet || isTwoPair) tier = 1;
+          else if (isTopPair && touchesBoard) tier = 2;
+          else if (isSuited && v1 <= 4 && touchesBoard && boardCards.length < 5) tier = 2;
+        } else {
+          if (isSet || isTwoPair) tier = 1;
+          else if (isTopPair) tier = 2;
+          else if (hit1 || hit2) {
+             if (v1 <= bVals[1] || v2 <= bVals[1]) tier = 3; 
+          }
+          else if (isPair) {
+             if (v1 < Math.max(...bVals)) tier = 3; 
+          }
+          else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
+          else if (isSuited && touchesBoard && boardCards.length < 5) tier = 3; 
+        }
+
+        // MULTI-WAY SCALING: A crowd means a stronger range is required to stay in the pot
+        if (opponents >= 3 && tier === 3) tier = 4;
+        if (opponents >= 5 && tier === 2) tier = 3;
+
+        return tier;
+      }, [boardCards, flopAction, turnAction, riverAction, opponents]);
+
       useEffect(() => {
         const workerCode = `
           import { CardGroup, OddsCalculator } from 'https://esm.sh/@agonyz/poker-odds-calculator';
@@ -217,7 +214,6 @@
         return () => workerRef.current.terminate();
       }, []);
 
-      // DISPATCH TO WORKER ON CHANGE
       useEffect(() => {
         if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
         setIsCalculating(true);
@@ -335,7 +331,6 @@
 
             <span className="text-[9px] uppercase tracking-widest text-gray-400 font-bold block mb-1.5">Action Line</span>
             
-            {/* 2x2 Grid for Multi-Street Toggles */}
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
                 <span className="text-[9px] text-gray-400">Preflop</span>
