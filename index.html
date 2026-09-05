@@ -82,7 +82,7 @@
         setOpponents(1);
       };
 
-      // V7 HEURISTIC: Sequence Awareness + Dynamic Sorting + Multi-Way 
+      // V8 HEURISTIC: Relative Sequence Improvement 
       const getHandTier = useCallback((hand) => {
         const [r1, r2] = hand;
         const v1 = RANKS.indexOf(r1); 
@@ -114,7 +114,26 @@
         
         const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
 
-        // SEQUENCE CHECKER (Straights & Draws)
+        // V8: Calculate native board sequence length
+        const uniqueBoardVals = [...new Set(bVals)].sort((a, b) => a - b);
+        let boardMaxCons = 1;
+        let bCur = 1;
+        for (let i = 0; i < uniqueBoardVals.length - 1; i++) {
+          if (uniqueBoardVals[i + 1] === uniqueBoardVals[i] + 1) bCur++;
+          else bCur = 1;
+          if (bCur > boardMaxCons) boardMaxCons = bCur;
+        }
+        if (uniqueBoardVals.includes(0)) { // Ace low check for board
+          const lowAceBoard = [...new Set([...uniqueBoardVals, 13])].sort((a,b) => a - b);
+          let lbCur = 1;
+          for (let i = 0; i < lowAceBoard.length - 1; i++) {
+            if (lowAceBoard[i + 1] === lowAceBoard[i] + 1) lbCur++;
+            else lbCur = 1;
+            if (lbCur > boardMaxCons) boardMaxCons = lbCur;
+          }
+        }
+
+        // Calculate combined sequence length (Hole + Board)
         const uniqueVals = [...new Set([...bVals, v1, v2])].sort((a, b) => a - b);
         let maxConsecutive = 1;
         let currentConsecutive = 1;
@@ -124,7 +143,6 @@
           if (currentConsecutive > maxConsecutive) maxConsecutive = currentConsecutive;
         }
         
-        // Handle Ace playing low (A-2-3-4-5) where A=0 and 2=12. Treat Ace as 13.
         if (uniqueVals.includes(0)) {
            const lowAceVals = [...new Set([...uniqueVals, 13])].sort((a,b) => a - b);
            let lowCons = 1;
@@ -134,8 +152,10 @@
              if (lowCons > maxConsecutive) maxConsecutive = lowCons;
            }
         }
+        
         const isMadeStraight = maxConsecutive >= 5;
-        const isStraightDraw = maxConsecutive === 4 && boardCards.length < 5;
+        // V8 Fix: Must genuinely improve the board sequence to be a draw
+        const isStraightDraw = maxConsecutive === 4 && maxConsecutive > boardMaxCons && boardCards.length < 5;
 
         let isRaised = false;
         if (boardCards.length >= 3 && flopAction === 'raise') isRaised = true;
