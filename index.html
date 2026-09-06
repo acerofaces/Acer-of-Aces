@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>King Slayer Exact</title>
+  <title>King Slayer Pure Math</title>
   
   <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer","short_name":"KingSlayer","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
 
@@ -13,14 +13,6 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
-  <script type="importmap">
-    {
-      "imports": {
-        "@agonyz/poker-odds-calculator": "https://esm.sh/@agonyz/poker-odds-calculator"
-      }
-    }
-  </script>
 
   <style>
     body { background-color: #0a0a0a; margin: 0; padding: 0; color: white; font-family: system-ui, sans-serif; user-select: none; -webkit-tap-highlight-color: transparent; }
@@ -44,7 +36,6 @@
     function App() {
       const [hero, setHero] = useState([null, null]);
       const [board, setBoard] = useState([null, null, null, null, null]);
-      const [villains, setVillains] = useState(Array(7).fill([null, null]));
       const [opponents, setOpponents] = useState(1);
 
       const [pickingSlot, setPickingSlot] = useState(null);
@@ -55,48 +46,80 @@
       const workerRef = useRef(null);
 
       const deadCards = useMemo(() => {
-        return [
-          ...hero,
-          ...board,
-          ...villains.slice(0, opponents).flat()
-        ].filter(Boolean);
-      }, [hero, board, villains, opponents]);
+        return [...hero, ...board].filter(Boolean);
+      }, [hero, board]);
 
       const handleReset = () => {
         setHero([null, null]);
         setBoard([null, null, null, null, null]);
-        setVillains(Array(7).fill([null, null]));
         setEquity({ win: 0, tie: 0, lose: 0 });
       };
 
       useEffect(() => {
         const workerCode = `
-          import { CardGroup, OddsCalculator } from 'https://esm.sh/@agonyz/poker-odds-calculator';
+          self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/pokersolver/2.1.4/pokersolver.min.js');
+          
+          const ALL_CARDS = [];
+          const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+          const suits = ['h', 'd', 'c', 's'];
+          ranks.forEach(r => suits.forEach(s => ALL_CARDS.push(r + s)));
 
           self.onmessage = function(e) {
-            const { hero, activeVillains, boardCards } = e.data;
+            const { hero, boardCards, opponents, iterations = 10000 } = e.data;
             
             try {
-              const playerGroups = [CardGroup.fromString(hero.join(''))];
-              activeVillains.forEach(v => {
-                playerGroups.push(CardGroup.fromString(v.join('')));
-              });
-              
-              const bGroup = boardCards.length > 0 ? CardGroup.fromString(boardCards.join('')) : undefined;
-              const res = OddsCalculator.calculate(playerGroups, bGroup);
-              const heroEq = res.equities[0];
-              
-              self.postMessage({ 
-                win: heroEq.getEquity(), 
-                tie: heroEq.getTiePercentage() 
-              });
-            } catch(err) {
-              self.postMessage({ win: 0, tie: 0, error: true });
+                let wins = 0;
+                let ties = 0;
+
+                const knownCards = new Set([...hero, ...boardCards]);
+                const deck = ALL_CARDS.filter(c => !knownCards.has(c));
+
+                for (let i = 0; i < iterations; i++) {
+                  let currentDeck = [...deck];
+                  // Fast Fisher-Yates shuffle
+                  for (let j = currentDeck.length - 1; j > 0; j--) {
+                    const k = Math.floor(Math.random() * (j + 1));
+                    const temp = currentDeck[j];
+                    currentDeck[j] = currentDeck[k];
+                    currentDeck[k] = temp;
+                  }
+
+                  let deckIndex = 0;
+                  const simBoard = [...boardCards];
+                  while (simBoard.length < 5) {
+                    simBoard.push(currentDeck[deckIndex++]);
+                  }
+
+                  const allHands = [];
+                  const heroEval = Hand.solve([...hero, ...simBoard]);
+                  heroEval.isHero = true; // Tag hero hand for easy identification
+                  allHands.push(heroEval);
+
+                  // Deal random cards to N opponents
+                  for (let o = 0; o < opponents; o++) {
+                     const oppCards = [currentDeck[deckIndex++], currentDeck[deckIndex++]];
+                     allHands.push(Hand.solve([...oppCards, ...simBoard]));
+                  }
+                  
+                  const winners = Hand.winners(allHands);
+                  
+                  // Check if our tagged hero hand is in the winners array
+                  const heroWon = winners.some(w => w.isHero);
+                  if (heroWon) {
+                     if (winners.length === 1) wins++;
+                     else ties++;
+                  }
+                }
+
+                self.postMessage({ win: (wins / iterations) * 100, tie: (ties / iterations) * 100 });
+            } catch (err) {
+                self.postMessage({ error: err.message });
             }
           };
         `;
         const blob = new Blob([workerCode], { type: 'application/javascript' });
-        workerRef.current = new Worker(URL.createObjectURL(blob), { type: 'module' });
+        // Use standard Web Worker to allow importScripts
+        workerRef.current = new Worker(URL.createObjectURL(blob));
         
         workerRef.current.onmessage = (e) => {
           if (e.data.error) {
@@ -114,45 +137,32 @@
       useEffect(() => {
         const filledHero = hero.filter(Boolean);
         const filledBoard = board.filter(Boolean);
-        const activeVillains = villains.slice(0, opponents).filter(v => v.filter(Boolean).length === 2);
 
-        if (filledHero.length === 2 && activeVillains.length > 0) {
+        if (filledHero.length === 2) {
           setIsCalculating(true);
-          workerRef.current.postMessage({ hero: filledHero, activeVillains, boardCards: filledBoard });
+          workerRef.current.postMessage({ hero: filledHero, boardCards: filledBoard, opponents });
         } else {
           setEquity({ win: 0, tie: 0, lose: 0 });
         }
-      }, [hero, board, villains, opponents]);
+      }, [hero, board, opponents]);
 
       const handleAssignCard = (card) => {
         if (!pickingSlot) return;
-        const { type, index, vIndex } = pickingSlot;
+        const { type, index } = pickingSlot;
         
         if (type === 'hero') { 
           const next = [...hero]; next[index] = card; setHero(next); 
         } else if (type === 'board') { 
           const next = [...board]; next[index] = card; setBoard(next); 
-        } else if (type === 'villain') {
-          const next = [...villains];
-          const nextV = [...next[vIndex]];
-          nextV[index] = card;
-          next[vIndex] = nextV;
-          setVillains(next);
         }
         setPickingSlot(null);
       };
 
-      const handleClearCard = (type, index, vIndex) => {
+      const handleClearCard = (type, index) => {
         if (type === 'hero') { 
           const next = [...hero]; next[index] = null; setHero(next); 
         } else if (type === 'board') { 
           const next = [...board]; next[index] = null; setBoard(next); 
-        } else if (type === 'villain') {
-          const next = [...villains];
-          const nextV = [...next[vIndex]];
-          nextV[index] = null;
-          next[vIndex] = nextV;
-          setVillains(next);
         }
       };
 
@@ -183,7 +193,7 @@
           <div className="flex justify-between items-center mb-4 mt-2">
             <div>
               <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5"><span className="text-[#00E599]">♠</span> KING SLAYER</h1>
-              <p className="text-[8px] text-gray-500 tracking-[0.25em]">EXACT COMBINATORICS</p>
+              <p className="text-[8px] text-[#00E599] tracking-[0.25em] font-bold">PURE MONTE CARLO ENGINE</p>
             </div>
             <button onClick={handleReset} className="text-[9px] text-[#FF0055] border border-[#FF0055]/30 px-3 py-1 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
               Reset All
@@ -208,57 +218,51 @@
             </div>
           </div>
 
-          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-3">
-            <div className="flex justify-between items-center mb-3 bg-black/40 p-1.5 rounded-lg border border-white/5">
-              <span className="text-[9px] text-gray-400 uppercase tracking-widest pl-1">Opponents</span>
-              <div className="flex gap-1">
-                {[1, 2, 3, 4, 5, 6, 7].map(num => (
-                  <button key={num} onClick={() => setOpponents(num)} className={`w-6 h-6 rounded text-[10px] font-bold transition-colors ${opponents === num ? 'bg-[#00E599] text-black' : 'bg-white/5 text-white active:bg-white/10'}`}>
-                    {num}
-                  </button>
-                ))}
-              </div>
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl mb-3">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Random Opponents</span>
+              <span className="text-[#00E599] text-xs font-black">{opponents}</span>
             </div>
-
-            <div className="grid gap-2">
-              {Array.from({ length: opponents }).map((_, vIndex) => (
-                <div key={`villain-${vIndex}`} className="flex items-center justify-between bg-black/40 p-2 rounded-lg border border-white/5">
-                  <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Villain {vIndex + 1}</span>
-                  <div className="flex gap-1">
-                    {renderCardBadge(villains[vIndex][0], () => setPickingSlot({ type: 'villain', index: 0, vIndex }), () => handleClearCard('villain', 0, vIndex))}
-                    {renderCardBadge(villains[vIndex][1], () => setPickingSlot({ type: 'villain', index: 1, vIndex }), () => handleClearCard('villain', 1, vIndex))}
-                  </div>
-                </div>
+            <div className="flex gap-1">
+              {[1, 2, 3, 4, 5, 6, 7].map(num => (
+                <button key={num} onClick={() => setOpponents(num)} className={`flex-1 h-8 rounded text-[11px] font-bold transition-colors ${opponents === num ? 'bg-[#00E599] text-black shadow-[0_0_10px_rgba(0,229,153,0.3)]' : 'bg-white/5 text-white active:bg-white/10'}`}>
+                  {num}
+                </button>
               ))}
             </div>
           </div>
 
-          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl">
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl relative overflow-hidden">
+            {isCalculating && (
+              <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-10 flex items-center justify-center">
+                <span className="text-[#00E599] text-[10px] font-bold tracking-widest animate-pulse">SIMULATING 10,000 RUNOUTS...</span>
+              </div>
+            )}
             <div className="mb-3">
               <div className="flex justify-between text-xs font-bold mb-1">
                 <span className="text-[#00E599] tracking-wider">HERO WIN</span>
-                <span className="text-[#00E599]">{isCalculating ? 'CALCULATING...' : `${equity.win.toFixed(1)}%`}</span>
+                <span className="text-[#00E599]">{equity.win.toFixed(1)}%</span>
               </div>
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
-                <div className="h-full bg-[#00E599] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.win}%` }} />
+                <div className="h-full bg-[#00E599] transition-all duration-300" style={{ width: `${equity.win}%` }} />
               </div>
             </div>
             <div className="mb-3">
               <div className="flex justify-between text-xs font-bold mb-1">
                 <span className="text-[#00A3FF] tracking-wider">TIE</span>
-                <span className="text-[#00A3FF]">{isCalculating ? '--' : `${equity.tie.toFixed(1)}%`}</span>
+                <span className="text-[#00A3FF]">{equity.tie.toFixed(1)}%</span>
               </div>
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
-                <div className="h-full bg-[#00A3FF] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.tie}%` }} />
+                <div className="h-full bg-[#00A3FF] transition-all duration-300" style={{ width: `${equity.tie}%` }} />
               </div>
             </div>
             <div>
               <div className="flex justify-between text-xs font-bold mb-1">
                 <span className="text-[#FF0055] tracking-wider">LOSE</span>
-                <span className="text-[#FF0055]">{isCalculating ? '--' : `${equity.lose.toFixed(1)}%`}</span>
+                <span className="text-[#FF0055]">{equity.lose.toFixed(1)}%</span>
               </div>
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
-                <div className="h-full bg-[#FF0055] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.lose}%` }} />
+                <div className="h-full bg-[#FF0055] transition-all duration-300" style={{ width: `${equity.lose}%` }} />
               </div>
             </div>
           </div>
