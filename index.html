@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>King Slayer Pure Math</title>
+  <title>King Slayer V18</title>
   
   <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer","short_name":"KingSlayer","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
 
@@ -25,6 +25,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useMemo, useRef } = React;
 
+    const ITERATIONS = 1500;
     const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
     const SUITS = [
       { id: 'h', symbol: '♥', color: 'text-red-500' },
@@ -57,17 +58,19 @@
 
       useEffect(() => {
         const workerCode = `
-          self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/pokersolver/2.1.4/pokersolver.min.js');
-          
           const ALL_CARDS = [];
           const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
           const suits = ['h', 'd', 'c', 's'];
           ranks.forEach(r => suits.forEach(s => ALL_CARDS.push(r + s)));
 
           self.onmessage = function(e) {
-            const { hero, boardCards, opponents, iterations = 10000 } = e.data;
+            const { hero, boardCards, opponents, iterations } = e.data;
             
             try {
+                if (!self.Hand) {
+                    self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/pokersolver/2.1.4/pokersolver.min.js');
+                }
+
                 let wins = 0;
                 let ties = 0;
 
@@ -91,19 +94,17 @@
                   }
 
                   const allHands = [];
-                  const heroEval = Hand.solve([...hero, ...simBoard]);
-                  heroEval.isHero = true; // Tag hero hand for easy identification
+                  const heroEval = self.Hand.solve([...hero, ...simBoard]);
+                  heroEval.isHero = true; 
                   allHands.push(heroEval);
 
-                  // Deal random cards to N opponents
                   for (let o = 0; o < opponents; o++) {
                      const oppCards = [currentDeck[deckIndex++], currentDeck[deckIndex++]];
-                     allHands.push(Hand.solve([...oppCards, ...simBoard]));
+                     allHands.push(self.Hand.solve([...oppCards, ...simBoard]));
                   }
                   
-                  const winners = Hand.winners(allHands);
+                  const winners = self.Hand.winners(allHands);
                   
-                  // Check if our tagged hero hand is in the winners array
                   const heroWon = winners.some(w => w.isHero);
                   if (heroWon) {
                      if (winners.length === 1) wins++;
@@ -118,11 +119,11 @@
           };
         `;
         const blob = new Blob([workerCode], { type: 'application/javascript' });
-        // Use standard Web Worker to allow importScripts
         workerRef.current = new Worker(URL.createObjectURL(blob));
         
         workerRef.current.onmessage = (e) => {
           if (e.data.error) {
+            console.error("Worker Error:", e.data.error);
             setEquity({ win: 0, tie: 0, lose: 0 });
           } else {
             const { win, tie } = e.data;
@@ -140,7 +141,7 @@
 
         if (filledHero.length === 2) {
           setIsCalculating(true);
-          workerRef.current.postMessage({ hero: filledHero, boardCards: filledBoard, opponents });
+          workerRef.current.postMessage({ hero: filledHero, boardCards: filledBoard, opponents, iterations: ITERATIONS });
         } else {
           setEquity({ win: 0, tie: 0, lose: 0 });
         }
@@ -193,7 +194,7 @@
           <div className="flex justify-between items-center mb-4 mt-2">
             <div>
               <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5"><span className="text-[#00E599]">♠</span> KING SLAYER</h1>
-              <p className="text-[8px] text-[#00E599] tracking-[0.25em] font-bold">PURE MONTE CARLO ENGINE</p>
+              <p className="text-[8px] text-[#00E599] tracking-[0.25em] font-bold">PURE MATH ENGINE (V18)</p>
             </div>
             <button onClick={handleReset} className="text-[9px] text-[#FF0055] border border-[#FF0055]/30 px-3 py-1 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
               Reset All
@@ -235,7 +236,7 @@
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl relative overflow-hidden">
             {isCalculating && (
               <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-10 flex items-center justify-center">
-                <span className="text-[#00E599] text-[10px] font-bold tracking-widest animate-pulse">SIMULATING 10,000 RUNOUTS...</span>
+                <span className="text-[#00E599] text-[10px] font-bold tracking-widest animate-pulse">SIMULATING {ITERATIONS} RUNOUTS...</span>
               </div>
             )}
             <div className="mb-3">
