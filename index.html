@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>King Slayer Lite</title>
+  <title>King Slayer Pro</title>
   
-  <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer Lite","short_name":"KingSlayerLite","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
+  <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer Pro","short_name":"KingSlayerPro","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -25,7 +25,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    const ITERATIONS = 1500;
+    const ITERATIONS = 10000;
     const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
     const SUITS = [
       { id: 'h', symbol: '♥', color: 'text-red-500' },
@@ -58,8 +58,7 @@
 
       useEffect(() => {
         const workerCode = `
-          import pokersolver from 'https://esm.sh/pokersolver';
-          const Hand = pokersolver.Hand;
+          import PokerEvaluator from 'https://esm.sh/poker-evaluator';
 
           const ALL_CARDS = [];
           const ranks = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
@@ -75,6 +74,11 @@
 
                 const knownCards = new Set([...hero, ...boardCards]);
                 const deck = ALL_CARDS.filter(c => !knownCards.has(c));
+                
+                const simBoard = new Array(5);
+                for(let i = 0; i < boardCards.length; i++) {
+                   simBoard[i] = boardCards[i];
+                }
 
                 for (let i = 0; i < iterations; i++) {
                   let currentDeck = [...deck];
@@ -87,28 +91,31 @@
                   }
 
                   let deckIndex = 0;
-                  const simBoard = [...boardCards];
-                  while (simBoard.length < 5) {
-                    simBoard.push(currentDeck[deckIndex++]);
+                  let boardLen = boardCards.length;
+                  while (boardLen < 5) {
+                    simBoard[boardLen++] = currentDeck[deckIndex++];
                   }
 
-                  const allHands = [];
-                  const heroEval = Hand.solve([...hero, ...simBoard]);
-                  heroEval.isHero = true; 
-                  allHands.push(heroEval);
+                  const heroHandArr = [hero[0], hero[1], simBoard[0], simBoard[1], simBoard[2], simBoard[3], simBoard[4]];
+                  // Evaluate directly to an integer value
+                  const heroVal = PokerEvaluator.evalHand(heroHandArr).value;
 
-                  // Deal random cards to N opponents
+                  let highestOppVal = 0;
+
                   for (let o = 0; o < opponents; o++) {
-                     const oppCards = [currentDeck[deckIndex++], currentDeck[deckIndex++]];
-                     allHands.push(Hand.solve([...oppCards, ...simBoard]));
+                     const oppHandArr = [currentDeck[deckIndex++], currentDeck[deckIndex++], simBoard[0], simBoard[1], simBoard[2], simBoard[3], simBoard[4]];
+                     const oppVal = PokerEvaluator.evalHand(oppHandArr).value;
+                     
+                     if (oppVal > highestOppVal) {
+                       highestOppVal = oppVal;
+                     }
                   }
                   
-                  const winners = Hand.winners(allHands);
-                  
-                  const heroWon = winners.some(w => w.isHero);
-                  if (heroWon) {
-                     if (winners.length === 1) wins++;
-                     else ties++;
+                  // Integer comparison replaces slow array sorting
+                  if (heroVal > highestOppVal) {
+                     wins++;
+                  } else if (heroVal === highestOppVal) {
+                     ties++;
                   }
                 }
 
@@ -210,8 +217,8 @@
           
           <div className="flex justify-between items-center mb-4 mt-2">
             <div>
-              <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5"><span className="text-[#00E599]">♠</span> KING SLAYER LITE</h1>
-              <p className="text-[8px] text-[#00E599] tracking-[0.25em] font-bold">PURE MATH ENGINE (FINAL)</p>
+              <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5"><span className="text-[#00E599]">♠</span> KING SLAYER PRO</h1>
+              <p className="text-[8px] text-[#00E599] tracking-[0.25em] font-bold">BITWISE ENGINE (V20)</p>
             </div>
             <button onClick={handleReset} className="text-[9px] text-[#FF0055] border border-[#FF0055]/30 px-3 py-1 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
               Reset All
@@ -253,7 +260,7 @@
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl relative overflow-hidden">
             {isCalculating && (
               <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-10 flex items-center justify-center">
-                <span className="text-[#00E599] text-[10px] font-bold tracking-widest animate-pulse">SIMULATING {ITERATIONS} RUNOUTS...</span>
+                <span className="text-[#00E599] text-[10px] font-bold tracking-widest animate-pulse">SIMULATING {ITERATIONS.toLocaleString()} RUNOUTS...</span>
               </div>
             )}
             <div className="mb-3">
