@@ -242,7 +242,7 @@
               <span className="text-[#00E599] text-xs font-black">{opponents}</span>
             </div>
             <div className="flex gap-1">
-              {[1, 2, 3, 4, 5, 6, 7].map(num => (
+              {[1, 2, 3, 4, 5, 6, 7, 8].map(num => (
                 <button key={num} onClick={() => setOpponents(num)} className={`flex-1 h-8 rounded text-[11px] font-bold transition-colors ${opponents === num ? 'bg-[#00E599] text-black shadow-[0_0_10px_rgba(0,229,153,0.3)]' : 'bg-white/5 text-white active:bg-white/10'}`}>
                   {num}
                 </button>
