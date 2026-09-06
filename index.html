@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>King Slayer Ultra</title>
+  <title>King Slayer Exact</title>
   
   <link rel="manifest" href='data:application/manifest+json,{"name":"King Slayer","short_name":"KingSlayer","start_url":".","display":"standalone","background_color":"#0a0a0a","theme_color":"#0a0a0a","icons":[{"src":"https://api.iconify.design/lucide:spade.svg?color=%2300E599","sizes":"192x192","type":"image/svg+xml"}]}'>
 
@@ -31,7 +31,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
-    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
     const SUITS = [
@@ -43,261 +43,67 @@
 
     function App() {
       const [hero, setHero] = useState([null, null]);
-      const [flop, setFlop] = useState([null, null, null]);
-      const [turn, setTurn] = useState(null);
-      const [river, setRiver] = useState(null);
+      const [board, setBoard] = useState([null, null, null, null, null]);
+      const [villains, setVillains] = useState(Array(7).fill([null, null]));
       const [opponents, setOpponents] = useState(1);
-
-      const [preflopAction, setPreflopAction] = useState('call');
-      const [flopAction, setFlopAction] = useState('check_call');
-      const [turnAction, setTurnAction] = useState('check_call');
-      const [riverAction, setRiverAction] = useState('check_call');
 
       const [pickingSlot, setPickingSlot] = useState(null);
       const [selectedRank, setSelectedRank] = useState('A');
-      const [equity, setEquity] = useState({ win: 0, tie: 0, lose: 0, combos: 0 });
+      const [equity, setEquity] = useState({ win: 0, tie: 0, lose: 0 });
       const [isCalculating, setIsCalculating] = useState(false);
       
       const workerRef = useRef(null);
 
-      const boardCards = useMemo(() => {
-        const b = [...flop];
-        if (turn) b.push(turn);
-        if (river) b.push(river);
-        return b.filter(Boolean);
-      }, [flop, turn, river]);
-
-      const deadCards = useMemo(() => [...hero.filter(Boolean), ...boardCards], [hero, boardCards]);
+      const deadCards = useMemo(() => {
+        return [
+          ...hero,
+          ...board,
+          ...villains.slice(0, opponents).flat()
+        ].filter(Boolean);
+      }, [hero, board, villains, opponents]);
 
       const handleReset = () => {
         setHero([null, null]);
-        setFlop([null, null, null]);
-        setTurn(null);
-        setRiver(null);
-        setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
-        setPreflopAction('call');
-        setFlopAction('check_call');
-        setTurnAction('check_call');
-        setRiverAction('check_call');
-        setOpponents(1);
+        setBoard([null, null, null, null, null]);
+        setVillains(Array(7).fill([null, null]));
+        setEquity({ win: 0, tie: 0, lose: 0 });
       };
-
-      // V15 HEURISTIC: The 4-Flush Override
-      const getHandTier = useCallback((hand) => {
-        const [r1, r2] = hand;
-        const v1 = RANKS.indexOf(r1); 
-        const v2 = RANKS.indexOf(r2);
-        const isPair = r1 === r2;
-        const isSuited = hand.includes('s');
-
-        let isPlayablePreflop = false;
-        if (isPair) isPlayablePreflop = true; 
-        else if (isSuited && v1 <= 4) isPlayablePreflop = true; 
-        else if (isSuited && Math.abs(v1 - v2) <= 3) isPlayablePreflop = true; 
-        else if (!isSuited && v1 <= 2 && v2 <= 3) isPlayablePreflop = true; 
-        else if (!isSuited && Math.abs(v1 - v2) === 1 && v1 <= 4) isPlayablePreflop = true; 
-        
-        if (!isPlayablePreflop) return 4; 
-        if (boardCards.length < 3) return 3; 
-
-        const bRanks = boardCards.map(c => c[0]);
-        const bVals = bRanks.map(r => RANKS.indexOf(r));
-        const hit1 = bRanks.includes(r1);
-        const hit2 = bRanks.includes(r2);
-        
-        const isSet = isPair && hit1;
-        const isTwoPair = hit1 && hit2 && !isPair;
-
-        const bRankCounts = bRanks.reduce((acc, r) => { acc[r] = (acc[r] || 0) + 1; return acc; }, {});
-        const isTripsOrBetter = isSet || (hit1 && bRankCounts[r1] >= 2) || (hit2 && bRankCounts[r2] >= 2);
-
-        const highestBoardVal = Math.min(...bVals);
-        const topBoardRank = RANKS[highestBoardVal];
-        const isTopPair = r1 === topBoardRank || r2 === topBoardRank;
-        
-        const isOverpair = isPair && (v1 < highestBoardVal);
-        const touchesBoard = bVals.some(bv => Math.abs(v1 - bv) <= 2) || bVals.some(bv => Math.abs(v2 - bv) <= 2);
-
-        const bSuits = boardCards.map(c => c.slice(-1));
-        const suitCounts = bSuits.reduce((acc, s) => { acc[s] = (acc[s] || 0) + 1; return acc; }, {});
-        const isMonotone = Math.max(...Object.values(suitCounts)) >= 3;
-        const is4Flush = Math.max(...Object.values(suitCounts)) >= 4;
-        const isBoardPaired = new Set(bVals).size < bVals.length;
-
-        const uniqueBoardVals = [...new Set(bVals)].sort((a, b) => a - b);
-        let boardMaxCons = 1;
-        let bCur = 1;
-        for (let i = 0; i < uniqueBoardVals.length - 1; i++) {
-          if (uniqueBoardVals[i + 1] === uniqueBoardVals[i] + 1) bCur++;
-          else bCur = 1;
-          if (bCur > boardMaxCons) boardMaxCons = bCur;
-        }
-        if (uniqueBoardVals.includes(0)) {
-          const lowAceBoard = [...new Set([...uniqueBoardVals, 13])].sort((a,b) => a - b);
-          let lbCur = 1;
-          for (let i = 0; i < lowAceBoard.length - 1; i++) {
-            if (lowAceBoard[i + 1] === lowAceBoard[i] + 1) lbCur++;
-            else lbCur = 1;
-            if (lbCur > boardMaxCons) boardMaxCons = lbCur;
-          }
-        }
-
-        const uniqueVals = [...new Set([...bVals, v1, v2])].sort((a, b) => a - b);
-        let maxConsecutive = 1;
-        let currentConsecutive = 1;
-        for (let i = 0; i < uniqueVals.length - 1; i++) {
-          if (uniqueVals[i + 1] === uniqueVals[i] + 1) currentConsecutive++;
-          else currentConsecutive = 1;
-          if (currentConsecutive > maxConsecutive) maxConsecutive = currentConsecutive;
-        }
-        
-        if (uniqueVals.includes(0)) {
-           const lowAceVals = [...new Set([...uniqueVals, 13])].sort((a,b) => a - b);
-           let lowCons = 1;
-           for (let i = 0; i < lowAceVals.length - 1; i++) {
-             if (lowAceVals[i + 1] === lowAceVals[i] + 1) lowCons++;
-             else lowCons = 1;
-             if (lowCons > maxConsecutive) maxConsecutive = lowCons;
-           }
-        }
-        
-        const isMadeStraight = maxConsecutive >= 5;
-        const isStraightDraw = maxConsecutive === 4 && maxConsecutive > boardMaxCons && boardCards.length < 5;
-
-        let isRaised = false;
-        if (boardCards.length >= 3 && flopAction === 'raise') isRaised = true;
-        if (boardCards.length >= 4 && turnAction === 'raise') isRaised = true;
-        if (boardCards.length === 5 && riverAction === 'raise') isRaised = true;
-
-        let tier = 4;
-
-        if (isRaised) {
-          const dangerBoard = (is4Flush || isBoardPaired) && boardCards.length === 5;
-          
-          if (dangerBoard) {
-              // V15 FIX: 4-Flush Override. Force visual flush threat, actively demote Sets.
-              if (is4Flush) {
-                  if (isSuited && v1 <= 4) tier = 1;
-                  else if (isTripsOrBetter) tier = 3; 
-              } else {
-                  if (isTripsOrBetter) tier = 1; 
-                  else if (isSuited && isMonotone && !is4Flush && (v1 <= 1 || (v1 <= 4 && v2 <= 4))) tier = 1;
-                  else if (isMadeStraight && !is4Flush) tier = 2;
-                  else if (isOverpair && !is4Flush) tier = 2;
-              }
-          } else {
-              if (isMadeStraight) tier = 1;
-              else if (isTripsOrBetter || isTwoPair || isOverpair) tier = 1;
-              else if (isTopPair && (v1 <= 2 || v2 <= 2)) tier = 2; 
-              else if (isStraightDraw) tier = 2;
-              else if (isSuited) {
-                if (isMonotone) {
-                    if (boardCards.length === 5) {
-                        if (v1 <= 2) tier = 1; 
-                        else if (v1 <= 4 && v2 <= 4) tier = 2;
-                    } else {
-                        if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 2; 
-                    }
-                } else if (boardCards.length < 5 && Math.abs(v1 - v2) <= 2 && v1 <= 5) {
-                    tier = 2;
-                }
-              }
-          }
-        } else {
-          if (isMadeStraight) tier = 1;
-          else if (isTripsOrBetter || isTwoPair || isOverpair) tier = 1;
-          else if (isTopPair) tier = 2;
-          else if (hit1 || hit2) {
-             if (v1 <= bVals[1] || v2 <= bVals[1]) tier = 3; 
-          }
-          else if (isPair) {
-             if (v1 < Math.max(...bVals)) tier = 3; 
-          }
-          else if (isStraightDraw) tier = 3;
-          else if (v1 <= 4 && v2 <= 5 && touchesBoard && boardCards.length < 5) tier = 3; 
-          else if (isSuited) {
-            if (is4Flush) {
-                if (v1 <= 4) tier = 3;
-            } else if (isMonotone) {
-                if (v1 <= 1 || (v1 <= 4 && v2 <= 4)) tier = 3;
-            } else if (boardCards.length < 5 && touchesBoard) {
-                tier = 3;
-            }
-          }
-        }
-
-        if (opponents >= 5 && tier === 2) tier = 3;
-        if (opponents >= 3 && tier === 3) tier = 4;
-
-        return tier;
-      }, [boardCards, flopAction, turnAction, riverAction, opponents]);
 
       useEffect(() => {
         const workerCode = `
           import { CardGroup, OddsCalculator } from 'https://esm.sh/@agonyz/poker-odds-calculator';
 
           self.onmessage = function(e) {
-            const { hero, boardCards, survivingRange, deadCards } = e.data;
-            let totalWin = 0, totalTie = 0, validCombos = 0;
-
-            const expandHand = (handStr, usedCards) => {
-              const suits = ['h', 's', 'c', 'd'];
-              const combos = [];
-              const [r1, r2] = handStr;
-              if (handStr.length === 2) {
-                for (let i = 0; i < 4; i++) {
-                  for (let j = i + 1; j < 4; j++) {
-                    const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
-                    if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-                  }
-                }
-              } else if (handStr.includes('s')) {
-                for (let i = 0; i < 4; i++) {
-                  const c1 = r1 + suits[i]; const c2 = r2 + suits[i];
-                  if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-                }
-              } else {
-                for (let i = 0; i < 4; i++) {
-                  for (let j = 0; j < 4; j++) {
-                    if (i !== j) {
-                      const c1 = r1 + suits[i]; const c2 = r2 + suits[j];
-                      if (!usedCards.includes(c1) && !usedCards.includes(c2)) combos.push([c1, c2]);
-                    }
-                  }
-                }
-              }
-              return combos;
-            };
-
-            survivingRange.forEach(handStr => {
-              const combos = expandHand(handStr, deadCards);
-              combos.forEach(combo => {
-                try {
-                  const p1 = CardGroup.fromString(hero.join(''));
-                  const p2 = CardGroup.fromString(combo.join(''));
-                  const b = CardGroup.fromString(boardCards.join(''));
-                  const res = OddsCalculator.calculate([p1, p2], b);
-                  totalWin += res.equities[0].getEquity();
-                  totalTie += res.equities[0].getTiePercentage();
-                  validCombos++;
-                } catch(err) {}
+            const { hero, activeVillains, boardCards } = e.data;
+            
+            try {
+              const playerGroups = [CardGroup.fromString(hero.join(''))];
+              activeVillains.forEach(v => {
+                playerGroups.push(CardGroup.fromString(v.join('')));
               });
-            });
-
-            self.postMessage({ win: totalWin, tie: totalTie, combos: validCombos });
+              
+              const bGroup = boardCards.length > 0 ? CardGroup.fromString(boardCards.join('')) : undefined;
+              const res = OddsCalculator.calculate(playerGroups, bGroup);
+              const heroEq = res.equities[0];
+              
+              self.postMessage({ 
+                win: heroEq.getEquity(), 
+                tie: heroEq.getTiePercentage() 
+              });
+            } catch(err) {
+              self.postMessage({ win: 0, tie: 0, error: true });
+            }
           };
         `;
         const blob = new Blob([workerCode], { type: 'application/javascript' });
         workerRef.current = new Worker(URL.createObjectURL(blob), { type: 'module' });
         
         workerRef.current.onmessage = (e) => {
-          const { win, tie, combos } = e.data;
-          if (combos === 0) {
-            setEquity({ win: 0, tie: 0, lose: 0, combos: 0 });
+          if (e.data.error) {
+            setEquity({ win: 0, tie: 0, lose: 0 });
           } else {
-            const finalWin = win / combos;
-            const finalTie = tie / combos;
-            setEquity({ win: finalWin, tie: finalTie, lose: 100 - finalWin - finalTie, combos });
+            const { win, tie } = e.data;
+            setEquity({ win, tie, lose: 100 - win - tie });
           }
           setIsCalculating(false);
         };
@@ -306,32 +112,48 @@
       }, []);
 
       useEffect(() => {
-        if (hero.filter(Boolean).length < 2 || boardCards.length < 3) return;
-        setIsCalculating(true);
-        
-        const survivingRange = RANKS.flatMap(r1 => RANKS.map(r2 => {
-          const hand = r1 === r2 ? `${r1}${r2}` : RANKS.indexOf(r1) < RANKS.indexOf(r2) ? `${r1}${r2}s` : `${r2}${r1}o`;
-          return getHandTier(hand) !== 4 ? hand : null;
-        })).filter(Boolean);
+        const filledHero = hero.filter(Boolean);
+        const filledBoard = board.filter(Boolean);
+        const activeVillains = villains.slice(0, opponents).filter(v => v.filter(Boolean).length === 2);
 
-        workerRef.current.postMessage({ hero, boardCards, survivingRange, deadCards });
-      }, [hero, boardCards, preflopAction, flopAction, turnAction, riverAction, opponents, getHandTier, deadCards]);
+        if (filledHero.length === 2 && activeVillains.length > 0) {
+          setIsCalculating(true);
+          workerRef.current.postMessage({ hero: filledHero, activeVillains, boardCards: filledBoard });
+        } else {
+          setEquity({ win: 0, tie: 0, lose: 0 });
+        }
+      }, [hero, board, villains, opponents]);
 
       const handleAssignCard = (card) => {
         if (!pickingSlot) return;
-        const { type, index } = pickingSlot;
-        if (type === 'hero') { const next = [...hero]; next[index] = card; setHero(next); }
-        else if (type === 'flop') { const next = [...flop]; next[index] = card; setFlop(next); }
-        else if (type === 'turn') setTurn(card);
-        else if (type === 'river') setRiver(card);
+        const { type, index, vIndex } = pickingSlot;
+        
+        if (type === 'hero') { 
+          const next = [...hero]; next[index] = card; setHero(next); 
+        } else if (type === 'board') { 
+          const next = [...board]; next[index] = card; setBoard(next); 
+        } else if (type === 'villain') {
+          const next = [...villains];
+          const nextV = [...next[vIndex]];
+          nextV[index] = card;
+          next[vIndex] = nextV;
+          setVillains(next);
+        }
         setPickingSlot(null);
       };
 
-      const handleClearCard = (type, index) => {
-        if (type === 'hero') { const next = [...hero]; next[index] = null; setHero(next); }
-        else if (type === 'flop') { const next = [...flop]; next[index] = null; setFlop(next); }
-        else if (type === 'turn') setTurn(null);
-        else if (type === 'river') setRiver(null);
+      const handleClearCard = (type, index, vIndex) => {
+        if (type === 'hero') { 
+          const next = [...hero]; next[index] = null; setHero(next); 
+        } else if (type === 'board') { 
+          const next = [...board]; next[index] = null; setBoard(next); 
+        } else if (type === 'villain') {
+          const next = [...villains];
+          const nextV = [...next[vIndex]];
+          nextV[index] = null;
+          next[vIndex] = nextV;
+          setVillains(next);
+        }
       };
 
       const renderCardBadge = (card, onClick, onClear) => {
@@ -355,56 +177,34 @@
         );
       };
 
-      const renderMatrixCell = (r1, r2, i, j) => {
-        const isSuited = i < j;
-        const hand = i === j ? `${r1}${r2}` : isSuited ? `${r1}${r2}s` : `${r2}${r1}o`;
-        const tier = getHandTier(hand);
-
-        let style = "bg-[#121212] text-white/20 opacity-30";
-        if (tier === 1) style = "bg-white text-black font-bold shadow-[0_0_8px_#00E599]";
-        if (tier === 2) style = "bg-[#00E599] text-black font-semibold";
-        if (tier === 3) style = "bg-[#00A3FF]/80 text-white";
-
-        return (
-          <div key={hand} className={`w-[24px] h-[24px] flex items-center justify-center text-[7.5px] rounded-sm transition-all duration-300 ${style}`}>
-            {hand}
-          </div>
-        );
-      };
-
       return (
         <div className="w-full max-w-[410px] min-h-screen mx-auto bg-[#0a0a0a] text-white p-3 pb-20 overflow-x-hidden">
           
           <div className="flex justify-between items-center mb-4 mt-2">
             <div>
               <h1 className="text-lg font-black tracking-wider text-white flex items-center gap-1.5"><span className="text-[#00E599]">♠</span> KING SLAYER</h1>
-              <p className="text-[8px] text-gray-500 tracking-[0.25em]">ODDS CALCULATOR ULTRA</p>
+              <p className="text-[8px] text-gray-500 tracking-[0.25em]">EXACT COMBINATORICS</p>
             </div>
+            <button onClick={handleReset} className="text-[9px] text-[#FF0055] border border-[#FF0055]/30 px-3 py-1 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
+              Reset All
+            </button>
           </div>
 
           <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-3 w-full">
-            <div className="flex justify-between items-center mb-2">
-              <div className="flex gap-4">
-                <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Hero</span>
-                <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Board</span>
-              </div>
-              <button onClick={handleReset} className="text-[8px] text-[#FF0055] border border-[#FF0055]/30 px-2 py-0.5 rounded uppercase tracking-widest font-bold active:bg-[#FF0055]/20 transition-colors">
-                Clear Hand
-              </button>
+            <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold mb-2 block">Hero Hand</span>
+            <div className="flex gap-2 mb-4">
+              {renderCardBadge(hero[0], () => setPickingSlot({ type: 'hero', index: 0 }), () => handleClearCard('hero', 0))}
+              {renderCardBadge(hero[1], () => setPickingSlot({ type: 'hero', index: 1 }), () => handleClearCard('hero', 1))}
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1">
-                {renderCardBadge(hero[0], () => setPickingSlot({ type: 'hero', index: 0 }), () => handleClearCard('hero', 0))}
-                {renderCardBadge(hero[1], () => setPickingSlot({ type: 'hero', index: 1 }), () => handleClearCard('hero', 1))}
-              </div>
-              <div className="h-8 w-[1px] bg-white/10 shrink-0" />
-              <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
-                {renderCardBadge(flop[0], () => setPickingSlot({ type: 'flop', index: 0 }), () => handleClearCard('flop', 0))}
-                {renderCardBadge(flop[1], () => setPickingSlot({ type: 'flop', index: 1 }), () => handleClearCard('flop', 1))}
-                {renderCardBadge(flop[2], () => setPickingSlot({ type: 'flop', index: 2 }), () => handleClearCard('flop', 2))}
-                {renderCardBadge(turn, () => setPickingSlot({ type: 'turn', index: 0 }), () => handleClearCard('turn', 0))}
-                {renderCardBadge(river, () => setPickingSlot({ type: 'river', index: 0 }), () => handleClearCard('river', 0))}
-              </div>
+
+            <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold mb-2 block">Board</span>
+            <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+              {board.map((c, i) => (
+                <React.Fragment key={`board-${i}`}>
+                  {renderCardBadge(c, () => setPickingSlot({ type: 'board', index: i }), () => handleClearCard('board', i))}
+                  {i === 2 && <div className="h-12 w-[1px] bg-white/10 shrink-0 mx-1" />}
+                </React.Fragment>
+              ))}
             </div>
           </div>
 
@@ -420,44 +220,23 @@
               </div>
             </div>
 
-            <span className="text-[9px] uppercase tracking-widest text-gray-400 font-bold block mb-1.5">Action Line</span>
-            
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center justify-between bg-black/40 px-2 py-1 rounded-lg border border-white/5">
-                <span className="text-[9px] text-gray-400">Preflop</span>
-                <div className="flex gap-0.5">
-                  <button onClick={() => setPreflopAction('call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${preflopAction === 'call' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Call</button>
-                  <button onClick={() => setPreflopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${preflopAction === 'raise' ? 'bg-[#00A3FF] text-white font-bold' : 'text-gray-500'}`}>Raise</button>
+            <div className="grid gap-2">
+              {Array.from({ length: opponents }).map((_, vIndex) => (
+                <div key={`villain-${vIndex}`} className="flex items-center justify-between bg-black/40 p-2 rounded-lg border border-white/5">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Villain {vIndex + 1}</span>
+                  <div className="flex gap-1">
+                    {renderCardBadge(villains[vIndex][0], () => setPickingSlot({ type: 'villain', index: 0, vIndex }), () => handleClearCard('villain', 0, vIndex))}
+                    {renderCardBadge(villains[vIndex][1], () => setPickingSlot({ type: 'villain', index: 1, vIndex }), () => handleClearCard('villain', 1, vIndex))}
+                  </div>
                 </div>
-              </div>
-              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length >= 3 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
-                <span className="text-[9px] text-gray-400">Flop</span>
-                <div className="flex gap-0.5">
-                  <button onClick={() => setFlopAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
-                  <button onClick={() => setFlopAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${flopAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
-                </div>
-              </div>
-              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length >= 4 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
-                <span className="text-[9px] text-gray-400">Turn</span>
-                <div className="flex gap-0.5">
-                  <button onClick={() => setTurnAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${turnAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
-                  <button onClick={() => setTurnAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${turnAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
-                </div>
-              </div>
-              <div className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${boardCards.length === 5 ? 'bg-black/40 border-white/5 opacity-100' : 'bg-black/20 border-transparent opacity-40 pointer-events-none'}`}>
-                <span className="text-[9px] text-gray-400">River</span>
-                <div className="flex gap-0.5">
-                  <button onClick={() => setRiverAction('check_call')} className={`px-2 py-1 rounded text-[9px] transition-colors ${riverAction === 'check_call' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Check</button>
-                  <button onClick={() => setRiverAction('raise')} className={`px-2 py-1 rounded text-[9px] transition-colors ${riverAction === 'raise' ? 'bg-[#00E599] text-black font-bold' : 'text-gray-500'}`}>Raise</button>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
 
-          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl mb-3 shadow-2xl">
+          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl">
             <div className="mb-3">
               <div className="flex justify-between text-xs font-bold mb-1">
-                <span className="text-[#00E599] tracking-wider">WIN</span>
+                <span className="text-[#00E599] tracking-wider">HERO WIN</span>
                 <span className="text-[#00E599]">{isCalculating ? 'CALCULATING...' : `${equity.win.toFixed(1)}%`}</span>
               </div>
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
@@ -481,16 +260,6 @@
               <div className="h-1.5 w-full bg-[#121212] rounded-full overflow-hidden">
                 <div className="h-full bg-[#FF0055] transition-all duration-300" style={{ width: `${isCalculating ? 0 : equity.lose}%` }} />
               </div>
-            </div>
-          </div>
-
-          <div className="bg-[#121212]/80 backdrop-blur-md border border-white/10 p-3 rounded-xl mb-4">
-            <div className="flex justify-between text-[9px] uppercase tracking-widest text-gray-400 mb-2.5">
-              <span>Villain Matrix</span>
-              <span className="text-[#00A3FF] font-bold">{isCalculating ? '...' : `${equity.combos} Combos`}</span>
-            </div>
-            <div className="grid gap-[2px] mx-auto" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr))' }}>
-              {RANKS.map((r1, i) => RANKS.map((r2, j) => renderMatrixCell(r1, r2, i, j)))}
             </div>
           </div>
 
